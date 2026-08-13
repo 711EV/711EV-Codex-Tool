@@ -1,0 +1,7 @@
+node_modules/
+build/
+dist/
+CodexLocalSync.data/
+vite-dev.log
+vite-dev.err.log
+src-tauri/target/
