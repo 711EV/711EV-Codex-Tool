@@ -1,18 +1,16 @@
 {
   "name": "codex-local-sync",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.1.64",
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "vue-tsc --noEmit && vite build",
-    "build:desktop": "node scripts/package-desktop.mjs",
-    "preview": "vite preview",
-    "tauri": "tauri",
+    "build": "node scripts/build.mjs",
+    "package": "node scripts/package.mjs",
     "test": "vitest run"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.8.0",
+    "@tauri-apps/plugin-opener": "^2.5.4",
     "lucide-vue-next": "^0.468.0",
     "pinia": "^3.0.0",
     "vue": "^3.5.13"

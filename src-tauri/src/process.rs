@@ -6,6 +6,9 @@ use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, RefreshKind, System};
 
 use crate::error::{AppError, AppResult};
 
+#[cfg(target_os = "windows")]
+const OFFICIAL_CODEX_APP_ID: &str = "OpenAI.Codex_2p2nqsd0c76g0!App";
+
 pub struct ShutdownOutcome {
     pub closed: bool,
     pub executable: Option<String>,
@@ -18,8 +21,9 @@ struct MatchingProcess {
 
 fn matching_processes(codex_home: &Path) -> Vec<MatchingProcess> {
     let target = normalize(codex_home);
-    let default_home =
-        crate::profiles::discover_default().is_some_and(|path| normalize(&path) == target);
+    let default_home = dirs::home_dir()
+        .map(|path| path.join(".codex"))
+        .is_some_and(|path| normalize(&path) == target);
     let mut system = System::new_with_specifics(
         RefreshKind::nothing().with_processes(ProcessRefreshKind::everything()),
     );
@@ -34,11 +38,7 @@ fn matching_processes(codex_home: &Path) -> Vec<MatchingProcess> {
             let name = process.name().to_string_lossy().to_ascii_lowercase();
             let process_stem = name.strip_suffix(".exe").unwrap_or(&name);
             let executable = process.exe().map(|path| path.to_string_lossy().to_string());
-            let is_desktop_client = process_stem == "chatgpt"
-                || (process_stem == "codex"
-                    && executable.as_deref().is_some_and(|path| {
-                        normalize_text(path).contains(".app\\contents\\macos")
-                    }));
+            let is_desktop_client = is_desktop_client_process(process_stem, executable.as_deref());
             if !is_desktop_client {
                 return None;
             }
@@ -68,6 +68,13 @@ fn matching_processes(codex_home: &Path) -> Vec<MatchingProcess> {
         .collect()
 }
 
+fn is_desktop_client_process(process_stem: &str, executable: Option<&str>) -> bool {
+    process_stem == "chatgpt"
+        || (process_stem == "codex"
+            && executable
+                .is_some_and(|path| normalize_text(path).contains(".app\\contents\\macos")))
+}
+
 pub fn restart(app_path: Option<&str>, codex_home: &Path) -> AppResult<bool> {
     let Some(app_path) = app_path.map(str::trim).filter(|path| !path.is_empty()) else {
         return Ok(false);
@@ -89,11 +96,32 @@ pub fn restart(app_path: Option<&str>, codex_home: &Path) -> AppResult<bool> {
         std::process::Command::new(path)
     };
 
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    let mut command = if is_official_windows_package_path(path) {
+        let mut command = std::process::Command::new("explorer.exe");
+        command.arg(format!("shell:AppsFolder\\{OFFICIAL_CODEX_APP_ID}"));
+        command
+    } else {
+        std::process::Command::new(path)
+    };
+
+    #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
     let mut command = std::process::Command::new(path);
 
     command.env("CODEX_HOME", codex_home).spawn()?;
     Ok(true)
+}
+
+#[cfg(target_os = "windows")]
+fn is_official_windows_package_path(path: &Path) -> bool {
+    let mut has_windows_apps = false;
+    let mut has_official_package = false;
+    for component in path.components() {
+        let value = component.as_os_str().to_string_lossy();
+        has_windows_apps |= value.eq_ignore_ascii_case("WindowsApps");
+        has_official_package |= value.to_ascii_lowercase().starts_with("openai.codex_");
+    }
+    has_windows_apps && has_official_package
 }
 
 pub fn ensure_stopped(codex_home: &Path, force: bool) -> AppResult<ShutdownOutcome> {
@@ -225,4 +253,44 @@ fn normalize(path: &Path) -> String {
 
 fn normalize_text(value: &str) -> String {
     value.replace('/', "\\").to_ascii_lowercase()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn excludes_codex_cli_from_desktop_processes() {
+        assert!(!is_desktop_client_process(
+            "codex",
+            Some(r"C:\Users\tester\AppData\Roaming\npm\node_modules\@openai\codex\bin\codex.exe")
+        ));
+        assert!(!is_desktop_client_process("codex", None));
+    }
+
+    #[test]
+    fn recognizes_desktop_processes_on_windows_and_macos() {
+        assert!(is_desktop_client_process(
+            "chatgpt",
+            Some(r"C:\Program Files\WindowsApps\OpenAI.Codex\ChatGPT.exe")
+        ));
+        assert!(is_desktop_client_process(
+            "codex",
+            Some("/Applications/Codex.app/Contents/MacOS/Codex")
+        ));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn recognizes_the_official_packaged_client_path() {
+        assert!(is_official_windows_package_path(Path::new(
+            "C:/Program Files/WindowsApps/OpenAI.Codex_26.810.7004.0_x64__publisher/app/ChatGPT.exe"
+        )));
+        assert!(is_official_windows_package_path(Path::new(
+            "C:/Program Files/WindowsApps/OpenAI.Codex_26.810.7004.0_x64__publisher/app/resources/codex.exe"
+        )));
+        assert!(!is_official_windows_package_path(Path::new(
+            "C:/Users/demo/AppData/Local/OpenAI/Codex/bin/version/codex.exe"
+        )));
+    }
 }

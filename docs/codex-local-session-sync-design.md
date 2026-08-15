@@ -156,7 +156,23 @@ CodexLocalSync.data/
 
 ## 6. 实例模型
 
-每个账号或自定义 API Provider 都对应一个独立实例：
+### 6.0 自动发现范围
+
+工具面向 Windows 和 macOS 的普遍安装场景执行有界发现，不依赖开发机路径。候选来源包括：
+
+- 当前进程和系统提供的 `CODEX_HOME`；
+- 官方默认目录 `~/.codex`；
+- 运行中的 Codex、ChatGPT 或实例切换工具进程暴露的环境变量/启动参数；
+- `CodexLocalSync.data/profiles` 中的托管实例；
+- 常见切换工具的标准数据目录及其 `codex_instances.json` 路径引用；
+- 已通过指纹校验的实例的直接同级目录；
+- 用户通过 `CODEX_SYNC_DISCOVERY_ROOTS` 显式提供的额外根目录。
+
+候选目录必须存在 `config.toml`、`sessions/`、`archived_sessions/`、`session_index.jsonl`、`state_*.sqlite`、`sqlite/state_*.sqlite` 或 `.codex-global-state.json` 等 Codex 指纹才会登记。扫描限制目录项与配置文件大小，不执行整盘递归搜索。发现器不会读取 `auth.json`，也不会仅凭该文件登记实例。
+
+一个物理 `CODEX_HOME` 是一个同步实例。同一目录中 `[model_providers.<id>]`、`[profiles.<name>]` 和 `<name>.config.toml` 声明的 Provider/Profile 作为该实例元数据展示和刷新，不拆分为多个虚假的同步目标。已注销账号只有在独立本地目录或实例清单引用仍然存在时才能被发现。
+
+每个拥有独立本地会话目录的账号或自定义 API 环境都对应一个实例：
 
 ```rust
 struct Profile {
@@ -449,17 +465,11 @@ backups/<job-id>/
 
 ```text
 profiles
-thread_snapshots
-thread_replicas
-sync_baselines
-sync_jobs
-sync_job_items
-conflicts
-backups
-app_installations
+provider_thread_replicas
 ```
 
-`thread_replicas` 用于记录同一逻辑线程在哪些 Profile 中存在。`sync_baselines` 保存上次成功同步时两端的指纹，用于判断后续是否分叉。
+`provider_thread_replicas` 用于记录同一逻辑线程在不同 Provider 中的来源、副本和内容指纹。
+旧版 `sync_baselines`、`sync_jobs` 及任务历史表不再创建或使用。
 
 ## 14. Tauri Command 设计
 

@@ -1,6 +1,19 @@
 export type ProfileKind = "chat_gpt_account" | "custom_api";
 export type ProfileMode = "external" | "managed";
 
+export interface DiscoveredProvider {
+  id: string;
+  sourceFile: string;
+  active: boolean;
+}
+
+export interface DiscoveredConfigProfile {
+  name: string;
+  sourceFile: string;
+  providerId: string | null;
+  active: boolean;
+}
+
 export interface Profile {
   id: string;
   name: string;
@@ -9,6 +22,9 @@ export interface Profile {
   codexHome: string;
   providerId: string;
   appPath: string | null;
+  discoverySource: string;
+  providers: DiscoveredProvider[];
+  configProfiles: DiscoveredConfigProfile[];
   createdAt: string;
   updatedAt: string;
 }
@@ -18,6 +34,14 @@ export interface AppState {
   platform: string;
   profiles: Profile[];
   appServerPath: string | null;
+}
+
+export interface DiscoveryReport {
+  candidatesScanned: number;
+  discoveredCount: number;
+  addedCount: number;
+  refreshedCount: number;
+  profiles: Profile[];
 }
 
 export interface SessionLocation {
@@ -38,44 +62,173 @@ export interface SessionRecord {
   locations: SessionLocation[];
 }
 
-export type SyncAction =
-  | "copy"
-  | "update"
-  | "skip_identical"
-  | "skip_target_ahead"
-  | "conflict"
-  | "invalid";
+export type ThreadSourceKind = "cli" | "vscode" | "internal" | "unknown";
+export type ReplicationEligibility =
+  | "eligible"
+  | "current_provider"
+  | "archived"
+  | "internal_thread"
+  | "invalid_rollout"
+  | "already_replicated"
+  | "replica"
+  | "replica_updated"
+  | "source_updated";
 
-export interface SyncPlanItem {
+export interface ProviderBucket {
+  profileId: string;
+  providerId: string;
+  isCurrent: boolean;
+  activeRootThreadCount: number;
+  archivedThreadCount: number;
+  internalThreadCount: number;
+  replicatedCount: number;
+}
+
+export interface ProviderSessionRecord {
+  threadId: string;
+  providerId: string;
+  sourceKind: ThreadSourceKind;
+  archived: boolean;
+  title: string;
+  cwd: string | null;
+  updatedAt: string | null;
+  sizeBytes: number;
+  sha256: string;
+  agentNickname: string | null;
+  parentThreadId: string | null;
+  eligibility: ReplicationEligibility;
+  eligibilityReason: string;
+  replicaThreadId: string | null;
+  isReplica: boolean;
+}
+
+export interface ProviderWorkspaceSnapshot {
+  providerBuckets: ProviderBucket[];
+  selectedProviderId: string | null;
+  providerSessions: ProviderSessionRecord[];
+}
+
+export interface ArchiveCleanupItem {
   threadId: string;
   title: string;
-  action: SyncAction;
-  reason: string;
-  sourceSha256: string;
-  targetSha256: string | null;
+  providerId: string;
+  sourceKind: ThreadSourceKind;
+  updatedAt: string | null;
   sizeBytes: number;
 }
 
-export interface SyncPreview {
-  sourceProfileId: string;
-  targetProfileId: string;
-  items: SyncPlanItem[];
-  copyCount: number;
-  updateCount: number;
-  skipCount: number;
-  conflictCount: number;
-  backupBytes: number;
+export interface ArchiveCleanupPreview {
+  profileId: string;
+  providerId: string;
+  items: ArchiveCleanupItem[];
+  totalCount: number;
+  totalBytes: number;
 }
 
-export interface SyncResult {
-  jobId: string;
-  copiedCount: number;
-  updatedCount: number;
-  skippedCount: number;
-  conflictCount: number;
-  backupDir: string | null;
-  indexRebuilt: boolean;
+export interface ArchiveCleanupResultItem {
+  threadId: string;
+  title: string;
+  message: string;
+}
+
+export interface ArchiveCleanupResult {
+  providerId: string;
+  deleted: ArchiveCleanupResultItem[];
+  failed: ArchiveCleanupResultItem[];
+  clientRestarted: boolean;
   warning: string | null;
+}
+
+export type InvalidChildCleanupPreview = ArchiveCleanupPreview;
+export type InvalidChildCleanupResult = ArchiveCleanupResult;
+
+export type ReplicationAction =
+  | "create_replica"
+  | "skip_already_replicated"
+  | "source_updated"
+  | "skip_current_provider"
+  | "skip_archived"
+  | "skip_internal"
+  | "invalid";
+
+export interface ReplicationPlanItem {
+  threadId: string;
+  title: string;
+  sourceProviderId: string;
+  action: ReplicationAction;
+  reason: string;
+  sourceSha256: string;
+  replicaThreadId: string | null;
+  sizeBytes: number;
+}
+
+export interface ReplicationPreview {
+  profileId: string;
+  targetProviderId: string;
+  items: ReplicationPlanItem[];
+  createCount: number;
+  skipCount: number;
+  invalidCount: number;
+  estimatedBytes: number;
+}
+
+export interface ReplicaResultItem {
+  sourceThreadId: string;
+  replicaThreadId: string | null;
+  title: string;
+  status: string;
+  message: string;
+}
+
+export interface ReplicationResult {
+  jobId: string;
+  targetProviderId: string;
+  created: ReplicaResultItem[];
+  skipped: ReplicaResultItem[];
+  failed: ReplicaResultItem[];
+  clientRestarted: boolean;
+  warning: string | null;
+}
+
+export type UpdateSyncAction =
+  | "source_updated"
+  | "replica_updated"
+  | "conflict"
+  | "invalid";
+
+export interface UpdateSyncPlanItem {
+  mappingId: string;
+  sourceThreadId: string;
+  replicaThreadId: string;
+  title: string;
+  sourceProviderId: string;
+  targetProviderId: string;
+  action: UpdateSyncAction;
+  reason: string;
+}
+
+export interface UpdateSyncPreview {
+  profileId: string;
+  targetProviderId: string;
+  items: UpdateSyncPlanItem[];
+  updateCount: number;
+  conflictCount: number;
+  invalidCount: number;
+}
+
+export interface ReplicaMapping {
+  id: string;
+  profileId: string;
+  sourceThreadId: string;
+  sourceProviderId: string;
+  targetProviderId: string;
+  replicaThreadId: string;
+  sourceSha256: string;
+  replicaSha256: string;
+  status: string;
+  createdAt: string;
+  verifiedAt: string | null;
+  deletedAt: string | null;
 }
 
 export interface ProfileInput {

@@ -1,23 +1,21 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Codex Local Sync",
-  "version": "0.1.0",
+  "productName": "711EV-Codex-Tool",
+  "version": "0.1.64",
   "identifier": "com.codexlocalsync.desktop",
   "build": {
-    "beforeDevCommand": "npm run dev",
-    "devUrl": "http://127.0.0.1:1420",
-    "beforeBuildCommand": "npm run build",
     "frontendDist": "../build"
   },
   "app": {
     "windows": [
       {
-        "title": "Codex Local Sync",
+        "title": "711EV-Codex-Tool",
         "width": 1440,
         "height": 900,
         "minWidth": 1080,
         "minHeight": 680,
         "resizable": true,
+        "decorations": false,
         "fullscreen": false,
         "center": true
       }
@@ -29,9 +27,12 @@
   "bundle": {
     "active": true,
     "targets": "all",
-    "icon": [],
+    "icon": [
+      "icons/icon.ico",
+      "icons/icon.png"
+    ],
     "category": "DeveloperTool",
-    "shortDescription": "Synchronize local Codex sessions between profiles",
-    "longDescription": "A portable desktop tool for synchronizing local Codex project sessions between ChatGPT accounts and custom API profiles."
+    "shortDescription": "Replicate local Codex sessions across Providers",
+    "longDescription": "A portable desktop tool that creates independent Codex Thread replicas under the current Provider while preserving source sessions."
   }
 }
