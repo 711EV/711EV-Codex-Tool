@@ -69,5 +69,3 @@ cargo check
 - 写入前会尝试正常关闭匹配当前 Home 的客户端；超时后必须在 UI 中确认才能强制结束。
 - 新流程不创建备份，不直接写官方 Codex SQLite；验证失败时只删除本次创建且尚未交付的副本。
 - 已验证映射保持幂等。来源后续更新时不会覆盖可能已经继续聊天的旧副本。
-
-当前实施方案见 [docs/codex-provider-session-replication-plan.md](docs/codex-provider-session-replication-plan.md)。旧的跨 Home 设计保留在 [docs/codex-local-session-sync-design.md](docs/codex-local-session-sync-design.md) 作为兼容逻辑参考。
