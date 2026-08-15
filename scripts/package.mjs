@@ -36,7 +36,7 @@ try {
   console.log(`版本号：${packageJson.version}`);
   console.log(`程序：${artifact}`);
   console.log(`进程：${runtime}`);
-  console.log("dist：仅保留客户端和 CodexLocalSync.data");
+  console.log("dist：仅保留便携客户端、安装/升级产物和 CodexLocalSync.data");
 } catch (error) {
   if (stoppedCount > 0) {
     await launchArtifact().catch(() => {});
@@ -147,7 +147,17 @@ async function findMacProcesses() {
 }
 
 async function verifyDistContents() {
-  const expected = new Set([path.basename(artifact), "CodexLocalSync.data"]);
+  const expected = new Set(
+    isWindows
+      ? [
+          path.basename(artifact),
+          "711EV-Codex-Tool-Setup.exe",
+          "711EV-Codex-Tool-Setup.exe.sig",
+          "latest.json",
+          "CodexLocalSync.data",
+        ]
+      : [path.basename(artifact), "CodexLocalSync.data"],
+  );
   const actual = await readdir(distRoot);
   const missing = [...expected].filter((name) => !actual.includes(name));
   const unexpected = actual.filter((name) => !expected.has(name));

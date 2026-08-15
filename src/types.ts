@@ -36,6 +36,19 @@ export interface AppState {
   appServerPath: string | null;
 }
 
+export interface ApplicationUpdate {
+  currentVersion: string;
+  version: string;
+  date: string | null;
+  body: string | null;
+}
+
+export interface UpdateDownloadProgress {
+  downloadedBytes: number;
+  totalBytes: number | null;
+  percent: number | null;
+}
+
 export interface DiscoveryReport {
   candidatesScanned: number;
   discoveredCount: number;

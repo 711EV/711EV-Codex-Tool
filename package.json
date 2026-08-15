@@ -1,16 +1,19 @@
 {
   "name": "codex-local-sync",
   "private": true,
-  "version": "0.1.64",
+  "version": "0.1.66",
   "type": "module",
   "scripts": {
     "build": "node scripts/build.mjs",
     "package": "node scripts/package.mjs",
+    "release:gitea": "node scripts/release-gitea.mjs",
     "test": "vitest run"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.8.0",
     "@tauri-apps/plugin-opener": "^2.5.4",
+    "@tauri-apps/plugin-process": "^2.3.1",
+    "@tauri-apps/plugin-updater": "^2.10.1",
     "lucide-vue-next": "^0.468.0",
     "pinia": "^3.0.0",
     "vue": "^3.5.13"

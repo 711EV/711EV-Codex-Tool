@@ -1,7 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "711EV-Codex-Tool",
-  "version": "0.1.64",
+  "mainBinaryName": "711EV-Codex-Tool",
+  "version": "0.1.66",
   "identifier": "com.codexlocalsync.desktop",
   "build": {
     "frontendDist": "../build"
@@ -27,12 +28,36 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "createUpdaterArtifacts": true,
     "icon": [
       "icons/icon.ico",
       "icons/icon.png"
     ],
+    "publisher": "711EV",
+    "homepage": "https://www.711ev.com/",
     "category": "DeveloperTool",
     "shortDescription": "Replicate local Codex sessions across Providers",
-    "longDescription": "A portable desktop tool that creates independent Codex Thread replicas under the current Provider while preserving source sessions."
+    "longDescription": "A portable desktop tool that creates independent Codex Thread replicas under the current Provider while preserving source sessions.",
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser",
+        "languages": [
+          "SimpChinese"
+        ],
+        "installerIcon": "icons/icon.ico",
+        "compression": "lzma"
+      }
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEIxNzYyQjc2NzVENUE4QjQKUldTMHFOVjFkaXQyc1ZKY1hORUZyc01SNGdnemExdytQaHBleXV0M1cvTDdoVEJIRm1QOVdjN0oK",
+      "endpoints": [
+        "https://git.711ev.com/api/packages/711ev/generic/711ev-codex-tool/latest/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
   }
 }

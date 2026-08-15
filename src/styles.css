@@ -507,6 +507,37 @@ input:focus-visible {
   color: var(--accent);
 }
 
+.sidebar-version-tools {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.sidebar-update-button {
+  display: inline-flex;
+  width: 24px;
+  height: 24px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  color: var(--text-secondary);
+  background: rgba(255, 255, 255, 0.055);
+  border: 0;
+  border-radius: 4px;
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.sidebar-update-button:hover:not(:disabled) {
+  color: #fff;
+  background: rgba(238, 133, 188, 0.18);
+}
+
+.sidebar-update-button:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
 .profile-row {
   position: relative;
   display: grid;
@@ -1964,6 +1995,103 @@ select:focus,
 }
 
 .restart-client-modal .modal-actions {
+  justify-content: flex-end;
+}
+
+.application-update-modal {
+  width: min(470px, 100%);
+  padding-top: 24px;
+  text-align: center;
+}
+
+.application-update-icon {
+  display: grid;
+  width: 44px;
+  height: 44px;
+  margin: 0 auto 13px;
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-radius: 50%;
+  place-items: center;
+}
+
+.application-update-modal h2 {
+  margin-top: 5px;
+  font-size: 17px;
+}
+
+.application-update-versions {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  margin: 14px 20px;
+  color: var(--text-tertiary);
+  font-size: 10px;
+}
+
+.application-update-versions strong {
+  margin-left: 3px;
+  color: var(--text-primary);
+}
+
+.application-update-notes {
+  max-height: 150px;
+  margin: 0 18px 12px;
+  padding: 11px 12px;
+  overflow: auto;
+  color: var(--text-secondary);
+  background: rgba(255, 255, 255, 0.035);
+  border-radius: 5px;
+  font-size: 10px;
+  line-height: 1.65;
+  text-align: left;
+  white-space: pre-wrap;
+}
+
+.application-update-warning {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin: 0 18px 12px;
+  padding: 10px 12px;
+  color: var(--status-info);
+  background: var(--status-info-soft);
+  border-radius: 5px;
+  font-size: 10px;
+  line-height: 1.5;
+  text-align: left;
+}
+
+.application-update-warning svg {
+  flex: 0 0 auto;
+}
+
+.application-update-progress {
+  display: grid;
+  gap: 6px;
+  margin: 0 18px 12px;
+  color: var(--text-tertiary);
+  font-size: 10px;
+}
+
+.application-update-progress > div {
+  height: 4px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.07);
+  border-radius: 2px;
+}
+
+.application-update-progress span {
+  display: block;
+  min-width: 12%;
+  height: 100%;
+  background: var(--accent);
+  border-radius: inherit;
+  transition: width 160ms ease;
+}
+
+.application-update-modal .modal-actions {
   justify-content: flex-end;
 }
 

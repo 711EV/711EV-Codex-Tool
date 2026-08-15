@@ -8,6 +8,7 @@ import {
   ChevronRight,
   CircleAlert,
   Copy,
+  Download,
   Folder,
   GitFork,
   LoaderCircle,
@@ -23,8 +24,10 @@ import {
 import DesktopTitlebar from "./components/DesktopTitlebar.vue";
 import OpenAILogo from "./components/OpenAILogo.vue";
 import TopMenuBar from "./components/TopMenuBar.vue";
+import { appUpdater } from "./services/appUpdater";
 import { useWorkspaceStore } from "./stores/workspace";
 import type {
+  ApplicationUpdate,
   ArchiveCleanupPreview,
   InvalidChildCleanupPreview,
   ReplicationAction,
@@ -33,6 +36,7 @@ import type {
   ProviderSessionRecord,
   UpdateSyncAction,
   UpdateSyncPreview,
+  UpdateDownloadProgress,
 } from "./types";
 
 const workspace = useWorkspaceStore();
@@ -51,6 +55,10 @@ const childCleanupPreview = ref<InvalidChildCleanupPreview | null>(null);
 const childCleanupPreviewLoading = ref(false);
 const childCleanupResult = ref<Awaited<ReturnType<typeof workspace.cleanupInvalidChildSessions>> | null>(null);
 const manualRefreshing = ref(false);
+const applicationUpdate = ref<ApplicationUpdate | null>(null);
+const updateChecking = ref(false);
+const updateInstalling = ref(false);
+const updateProgress = ref<UpdateDownloadProgress | null>(null);
 const forceClosePrompt = ref(false);
 const restartPrompt = ref<{
   operation: "复制" | "迁移";
@@ -521,6 +529,43 @@ async function refreshWorkspace() {
     manualRefreshing.value = false;
   }
 }
+
+async function checkApplicationUpdate() {
+  if (updateChecking.value || updateInstalling.value) return;
+  updateChecking.value = true;
+  notice.value = null;
+  try {
+    applicationUpdate.value = await appUpdater.check();
+    if (!applicationUpdate.value) {
+      notice.value = `当前已是最新版本 ${appVersion}`;
+    }
+  } catch (reason) {
+    notice.value = `检查更新失败：${reason instanceof Error ? reason.message : String(reason)}`;
+  } finally {
+    updateChecking.value = false;
+  }
+}
+
+async function closeApplicationUpdate() {
+  if (updateInstalling.value) return;
+  await appUpdater.clear();
+  applicationUpdate.value = null;
+  updateProgress.value = null;
+}
+
+async function installApplicationUpdate() {
+  if (!applicationUpdate.value || updateInstalling.value) return;
+  updateInstalling.value = true;
+  updateProgress.value = { downloadedBytes: 0, totalBytes: null, percent: null };
+  try {
+    await appUpdater.install((progress) => {
+      updateProgress.value = progress;
+    });
+  } catch (reason) {
+    notice.value = `升级失败：${reason instanceof Error ? reason.message : String(reason)}`;
+    updateInstalling.value = false;
+  }
+}
 </script>
 
 <template>
@@ -588,7 +633,20 @@ async function refreshWorkspace() {
       </nav>
       <footer class="sidebar-version" aria-label="程序版本">
         <span class="sidebar-version-brand">by <strong>711EV</strong></span>
-        <span class="sidebar-version-number">版本号 <strong>{{ appVersion }}</strong></span>
+        <span class="sidebar-version-tools">
+          <span class="sidebar-version-number">版本号 <strong>{{ appVersion }}</strong></span>
+          <button
+            class="sidebar-update-button"
+            data-testid="check-application-update"
+            title="检查更新"
+            aria-label="检查更新"
+            :disabled="updateChecking || updateInstalling"
+            @click="checkApplicationUpdate"
+          >
+            <LoaderCircle v-if="updateChecking" :size="12" class="spinning" />
+            <RefreshCw v-else :size="12" />
+          </button>
+        </span>
       </footer>
       </aside>
 
@@ -1418,6 +1476,54 @@ async function refreshWorkspace() {
             <LoaderCircle v-if="workspace.restartingClient" :size="17" class="spinning" />
             <RefreshCw v-else :size="17" />
             重启 Desktop
+          </button>
+        </div>
+      </section>
+    </div>
+
+    <div
+      v-if="applicationUpdate"
+      class="modal-backdrop high-priority"
+      @mousedown.self="closeApplicationUpdate"
+    >
+      <section class="modal application-update-modal">
+        <div class="application-update-icon"><Download :size="23" /></div>
+        <p class="eyebrow">发现新版本</p>
+        <h2>711EV-Codex-Tool {{ applicationUpdate.version }}</h2>
+        <div class="application-update-versions">
+          <span>当前版本 <strong>{{ applicationUpdate.currentVersion }}</strong></span>
+          <MoveRight :size="16" />
+          <span>最新版本 <strong>{{ applicationUpdate.version }}</strong></span>
+        </div>
+        <p v-if="applicationUpdate.body" class="application-update-notes">
+          {{ applicationUpdate.body }}
+        </p>
+        <div class="application-update-warning">
+          <CircleAlert :size="17" />
+          <span>升级包通过签名验证后安装，安装完成会自动重启本工具，现有会话关联数据不会被覆盖。</span>
+        </div>
+        <div v-if="updateInstalling" class="application-update-progress">
+          <div><span :style="{ width: `${updateProgress?.percent ?? 12}%` }" /></div>
+          <small>
+            {{ updateProgress?.percent == null ? "正在下载升级包" : `已下载 ${updateProgress.percent}%` }}
+          </small>
+        </div>
+        <div class="modal-actions">
+          <button
+            class="secondary-button"
+            :disabled="updateInstalling"
+            @click="closeApplicationUpdate"
+          >
+            稍后升级
+          </button>
+          <button
+            class="primary-button"
+            :disabled="updateInstalling"
+            @click="installApplicationUpdate"
+          >
+            <LoaderCircle v-if="updateInstalling" :size="17" class="spinning" />
+            <Download v-else :size="17" />
+            {{ updateInstalling ? "正在升级" : "立即升级" }}
           </button>
         </div>
       </section>

@@ -1,6 +1,7 @@
 import { cp, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { homedir } from "node:os";
 import path from "node:path";
 import process from "node:process";
 
@@ -8,6 +9,11 @@ const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "
 const targetRoot = path.join(projectRoot, "src-tauri", "target", "release");
 const distRoot = path.join(projectRoot, "dist");
 const portableDataDirName = "CodexLocalSync.data";
+const portableExecutableName = "711EV-Codex-Tool.exe";
+const installerName = "711EV-Codex-Tool-Setup.exe";
+const installerSignatureName = `${installerName}.sig`;
+const updatePackageBaseUrl =
+  "https://git.711ev.com/api/packages/711ev/generic/711ev-codex-tool";
 const platform = process.platform;
 const versionFiles = [
   path.join(projectRoot, "package.json"),
@@ -30,6 +36,26 @@ const originalVersionFiles = new Map(
 const currentPackage = JSON.parse(originalVersionFiles.get(versionFiles[0]));
 const buildVersion = incrementPatchVersion(currentPackage.version);
 
+if (!process.env.TAURI_SIGNING_PRIVATE_KEY && !process.env.TAURI_SIGNING_PRIVATE_KEY_PATH) {
+  const defaultSigningKey = path.join(homedir(), ".tauri", "711ev-codex-tool.key");
+  if (await pathExists(defaultSigningKey)) {
+    process.env.TAURI_SIGNING_PRIVATE_KEY_PATH = defaultSigningKey;
+  }
+}
+if (!process.env.TAURI_SIGNING_PRIVATE_KEY && process.env.TAURI_SIGNING_PRIVATE_KEY_PATH) {
+  process.env.TAURI_SIGNING_PRIVATE_KEY = (
+    await readFile(process.env.TAURI_SIGNING_PRIVATE_KEY_PATH, "utf8")
+  ).trim();
+}
+if (!process.env.TAURI_SIGNING_PRIVATE_KEY) {
+  throw new Error(
+    "缺少升级签名私钥；请设置 TAURI_SIGNING_PRIVATE_KEY_PATH 或生成 ~/.tauri/711ev-codex-tool.key",
+  );
+}
+if (process.env.TAURI_SIGNING_PRIVATE_KEY_PASSWORD === undefined) {
+  process.env.TAURI_SIGNING_PRIVATE_KEY_PASSWORD = "";
+}
+
 try {
   await writeBuildVersion(buildVersion);
   await runNode([path.join("node_modules", "vite", "bin", "vite.js"), "build"]);
@@ -40,13 +66,15 @@ try {
     await runNode([
       path.join("node_modules", "@tauri-apps", "cli", "tauri.js"),
       "build",
-      "--no-bundle",
+      "--bundles",
+      "nsis",
     ]);
     await prepareOutputDirectory(system);
     await cp(
-      path.join(targetRoot, "codex-local-sync.exe"),
-      path.join(distRoot, "711EV-Codex-Tool.exe"),
+      path.join(targetRoot, portableExecutableName),
+      path.join(distRoot, portableExecutableName),
     );
+    await copyWindowsInstallerArtifacts(buildVersion);
   } else {
     await runNode([
       path.join("node_modules", "@tauri-apps", "cli", "tauri.js"),
@@ -69,6 +97,47 @@ try {
     [...originalVersionFiles].map(([filePath, contents]) => writeFile(filePath, contents, "utf8")),
   );
   throw error;
+}
+
+async function copyWindowsInstallerArtifacts(version) {
+  const bundleDir = path.join(targetRoot, "bundle", "nsis");
+  const files = await readdir(bundleDir);
+  const installerSource = singleFile(
+    files,
+    (name) => name.endsWith("-setup.exe"),
+    "NSIS 安装程序",
+  );
+  const signatureSource = `${installerSource}.sig`;
+  if (!files.includes(signatureSource)) {
+    throw new Error(`缺少升级包签名：${signatureSource}`);
+  }
+
+  await Promise.all([
+    cp(path.join(bundleDir, installerSource), path.join(distRoot, installerName)),
+    cp(path.join(bundleDir, signatureSource), path.join(distRoot, installerSignatureName)),
+  ]);
+
+  const signature = (await readFile(path.join(bundleDir, signatureSource), "utf8")).trim();
+  const platformKey = `windows-${process.arch === "arm64" ? "aarch64" : "x86_64"}`;
+  await writeJson(path.join(distRoot, "latest.json"), {
+    version,
+    notes: `711EV-Codex-Tool ${version}`,
+    pub_date: new Date().toISOString(),
+    platforms: {
+      [platformKey]: {
+        signature,
+        url: `${updatePackageBaseUrl}/${version}/${installerName}`,
+      },
+    },
+  });
+}
+
+function singleFile(files, predicate, label) {
+  const matches = files.filter(predicate);
+  if (matches.length !== 1) {
+    throw new Error(`${label}数量不正确：${matches.join(", ") || "未找到"}`);
+  }
+  return matches[0];
 }
 
 async function prepareOutputDirectory(system) {

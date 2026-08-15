@@ -60,15 +60,14 @@ fn launcher_directory(executable: &Path) -> AppResult<PathBuf> {
 fn prepare_data_dir(path: PathBuf) -> AppResult<PathBuf> {
     fs::create_dir_all(&path)?;
 
-    for child in [
-        "profiles",
-        "backups",
-        "exports",
-        "logs",
-        "locks",
-        "migrations",
-    ] {
+    for child in ["profiles", "locks"] {
         fs::create_dir_all(path.join(child))?;
+    }
+
+    // Older builds created these placeholders. remove_dir only removes empty
+    // directories, so any unexpected user files are left untouched.
+    for child in ["backups", "exports", "logs", "migrations"] {
+        let _ = fs::remove_dir(path.join(child));
     }
 
     let probe = path.join(".write-probe");
@@ -292,9 +291,19 @@ mod tests {
     #[test]
     fn creates_portable_layout() {
         let temp = tempfile::tempdir().expect("tempdir");
-        let data = prepare_data_dir(temp.path().join(DATA_DIR_NAME)).expect("prepare data");
+        let data_dir = temp.path().join(DATA_DIR_NAME);
+        fs::create_dir_all(data_dir.join("backups")).expect("create legacy empty directory");
+        fs::create_dir_all(data_dir.join("exports")).expect("create legacy populated directory");
+        fs::write(data_dir.join("exports").join("keep.txt"), b"keep")
+            .expect("write legacy user file");
+
+        let data = prepare_data_dir(data_dir).expect("prepare data");
         assert!(data.join("profiles").is_dir());
-        assert!(data.join("backups").is_dir());
+        assert!(data.join("locks").is_dir());
+        assert!(!data.join("backups").exists());
+        assert!(data.join("exports").join("keep.txt").is_file());
+        assert!(!data.join("logs").exists());
+        assert!(!data.join("migrations").exists());
         assert!(data.join("app.sqlite").parent().is_some());
     }
 }

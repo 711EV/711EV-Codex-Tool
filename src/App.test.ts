@@ -5,6 +5,7 @@ import { createPinia } from "pinia";
 import { nextTick } from "vue";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import App from "./App.vue";
+import { appUpdater } from "./services/appUpdater";
 import { backend } from "./services/backend";
 import { useWorkspaceStore } from "./stores/workspace";
 
@@ -32,6 +33,9 @@ describe("Codex Provider Sync workspace", () => {
     expect(wrapper.find(".profile-modal").exists()).toBe(false);
     expect(wrapper.find(".sidebar-version-brand").text()).toBe("by 711EV");
     expect(wrapper.find(".sidebar-version-number").text()).toBe(`版本号 ${__APP_VERSION__}`);
+    expect(wrapper.get('[data-testid="check-application-update"]').text()).toBe("");
+    expect(wrapper.get('[data-testid="check-application-update"]').attributes("title"))
+      .toBe("检查更新");
     expect(wrapper.find(".top-menu-storage").attributes("title")).toBe("~/.codex");
     expect(wrapper.find(".top-menu-storage").attributes("data-tooltip")).toBeUndefined();
     expect(wrapper.get('[data-testid="storage-location-switch"]').attributes("title"))
@@ -100,6 +104,51 @@ describe("Codex Provider Sync workspace", () => {
     expect(wrapper.text()).not.toContain("发送到另一个实例");
     expect(wrapper.text()).not.toContain("写入前创建完整备份");
     expect(wrapper.findAll(".session-row").every((row) => row.attributes("title") === undefined)).toBe(true);
+  });
+
+  it("checks for a signed application update from the version footer", async () => {
+    const checkUpdate = vi.spyOn(appUpdater, "check").mockResolvedValue({
+      currentVersion: "0.1.65",
+      version: "0.1.66",
+      date: "2026-08-16T04:30:00Z",
+      body: "新增安装程序与在线升级。",
+    });
+    const installUpdate = vi.spyOn(appUpdater, "install").mockImplementation(async (onProgress) => {
+      onProgress({ downloadedBytes: 75, totalBytes: 100, percent: 75 });
+    });
+
+    const wrapper = mount(App, {
+      global: { plugins: [createPinia()] },
+    });
+    await flushPromises();
+    await wrapper.get('[data-testid="check-application-update"]').trigger("click");
+    await flushPromises();
+
+    expect(checkUpdate).toHaveBeenCalledOnce();
+    const modal = wrapper.get(".application-update-modal");
+    expect(modal.findAll(".application-update-versions span")[0].text()).toBe("当前版本 0.1.65");
+    expect(modal.findAll(".application-update-versions span")[1].text()).toBe("最新版本 0.1.66");
+    expect(modal.text()).toContain("新增安装程序与在线升级。");
+    expect(modal.text()).toContain("现有会话关联数据不会被覆盖");
+
+    await modal.get(".primary-button").trigger("click");
+    await flushPromises();
+    expect(installUpdate).toHaveBeenCalledOnce();
+    expect(wrapper.get(".application-update-progress").text()).toContain("已下载 75%");
+  });
+
+  it("reports when the installed application is already current", async () => {
+    vi.spyOn(appUpdater, "check").mockResolvedValue(null);
+    const wrapper = mount(App, {
+      global: { plugins: [createPinia()] },
+    });
+    await flushPromises();
+
+    await wrapper.get('[data-testid="check-application-update"]').trigger("click");
+    await flushPromises();
+
+    expect(wrapper.get(".toast").text()).toContain(`当前已是最新版本 ${__APP_VERSION__}`);
+    expect(wrapper.find(".application-update-modal").exists()).toBe(false);
   });
 
   it("switches storage locations from the top menu and stays visible with one location", async () => {

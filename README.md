@@ -14,9 +14,12 @@ build/
 
 ```text
 dist/
-├─ 711EV-Codex-Tool.exe       # Windows
-├─ 711EV-Codex-Tool.app       # macOS
-└─ CodexLocalSync.data/       # 首次运行后生成
+├─ 711EV-Codex-Tool.exe                  # Windows 便携客户端
+├─ 711EV-Codex-Tool-Setup.exe            # Windows 安装/升级程序
+├─ 711EV-Codex-Tool-Setup.exe.sig        # 安装/升级程序签名
+├─ latest.json                            # 在线更新清单
+├─ 711EV-Codex-Tool.app                  # macOS（在 macOS 构建）
+└─ CodexLocalSync.data/                  # 首次运行后生成
 ```
 
 首次运行时，程序会在可执行文件同级创建：
@@ -25,9 +28,9 @@ dist/
 CodexLocalSync.data/
 ```
 
-该目录包含工具数据库、托管 Profile、日志和锁。工具数据库只保存来源 Thread 与副本 Thread 的映射，不保存聊天正文。若同级目录需要管理员权限，程序只在初始化阶段请求一次授权并把目录权限授予当前用户。
+该目录包含工具数据库、托管 Profile 和操作锁。工具数据库只保存来源 Thread 与副本 Thread 的映射，不保存聊天正文。若同级目录需要管理员权限，程序只在初始化阶段请求一次授权并把目录权限授予当前用户。
 
-Windows 和 macOS 分别在对应系统执行打包命令。Windows 生成单个 `.exe`；macOS 生成 Finder 中的单个 `.app`。运行数据都放在客户端同级的 `CodexLocalSync.data` 中。
+Windows 和 macOS 分别在对应系统执行打包命令。Windows 同时生成便携 `.exe` 和 NSIS 安装程序；安装时可以选择目录，完成页默认勾选“创建桌面快捷方式”和“运行应用”。主程序文件名为 `711EV-Codex-Tool.exe`，快捷方式名称为 `711EVCodex工具`。macOS 生成 Finder 中的单个 `.app`。运行数据都放在客户端同级的 `CodexLocalSync.data` 中，覆盖升级不会删除该目录。
 
 ## 构建
 
@@ -38,6 +41,14 @@ npm run package
 
 `npm run package` 是日常打包的唯一入口。该命令会关闭正在运行的当前客户端，执行前端测试、Rust 格式检查和 Rust 测试，调用底层构建，自动增加补丁版本号，校验 `dist` 目录，重新启动客户端并确认进程响应正常。打包时会清除旧客户端，但始终保留同级的 `CodexLocalSync.data` 运行数据。
 
+Windows 升级包使用 Tauri 签名。默认私钥路径为：
+
+```text
+C:\Users\当前用户名\.tauri\711ev-codex-tool.key
+```
+
+私钥只存在于发布电脑，不会进入 Git、安装程序或用户目录。必须单独安全备份；丢失私钥后，已安装的旧客户端无法验证后续升级。需要改用其他磁盘时，通过 `TAURI_SIGNING_PRIVATE_KEY_PATH` 指定绝对路径。
+
 只需要生成产物、不需要执行完整测试和启动验证时，可单独调用底层构建器：
 
 ```bash
@@ -45,6 +56,33 @@ npm run build
 ```
 
 该命令会生成根目录 `build/` 中的 Vue 文件和 `dist/` 中的最终客户端，并自动增加补丁版本号。
+
+## 发布到 Gitea 软件包
+
+远程仓库为 `https://git.711ev.com/711ev/711EV-Codex-Tool`，二进制版本发布到 Gitea Generic Packages。先在 Gitea 的“设置 -> 应用 -> 访问令牌”创建具有软件包读写权限的令牌，然后在 PowerShell 中执行：
+
+```powershell
+npm run package
+
+git add .
+git commit -m "release: 0.1.66"
+git tag v0.1.66
+git push origin master
+git push origin v0.1.66
+
+$secureToken = Read-Host "Gitea Token" -AsSecureString
+$env:GITEA_TOKEN = [Net.NetworkCredential]::new("", $secureToken).Password
+npm run release:gitea -- --notes "本次版本更新说明"
+Remove-Item Env:GITEA_TOKEN
+```
+
+版本号以实际 `package.json` 为准。`git push` 只发布源码和版本标签；`npm run release:gitea` 才会通过 Gitea API 上传便携客户端、安装程序、升级包、签名和 `latest.json`。同一版本需要重新上传时，确认旧软件包可以覆盖后执行：
+
+```powershell
+npm run release:gitea -- --replace --notes "修正后的版本说明"
+```
+
+客户端的“检查更新”读取公开地址 `https://git.711ev.com/api/packages/711ev/generic/711ev-codex-tool/latest/latest.json`，用户端不需要 Gitea 令牌。
 
 测试命令：
 
