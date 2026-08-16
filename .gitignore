@@ -8,3 +8,4 @@ vite-dev.log
 vite-dev.err.log
 src-tauri/target/
 src-tauri/gen/schemas/
+agent.md

@@ -1,67 +1,132 @@
-# Codex Local Sync
+# 711EV-Codex-Tool
 
-在同一个本地 `CODEX_HOME` 中按历史 Provider 查看 Codex 会话，并把来源会话复制为当前 Provider 下可继续使用的新 Thread。项目使用 Tauri 2、Vue 3、TypeScript 和 Rust，聊天内容不会上传到第三方服务。
+`711EV-Codex-Tool` 是一个本地 Codex 会话管理工具，用于按供应商查看同一存储位置中的历史会话，并在官方账号与不同中转供应商之间复制、迁移或同步可继续使用的 Codex 会话。
 
-## 运行
+项目基于 Tauri 2、Vue 3、TypeScript 和 Rust，支持 Windows 10、Windows 11 和 macOS。作者：711EV。
 
-Vue 静态资源统一生成到项目根目录：
+## 功能
 
-```text
-build/
-```
+- 自动发现当前 `CODEX_HOME`、默认 `~/.codex`、运行中的 Codex/ChatGPT 客户端、工具托管目录和受支持切换工具中的存储位置。
+- 支持切换已发现的多个存储位置；只有一个位置时保留切换按钮但不可点击。
+- 根据当前配置和本地 rollout 的 `model_provider` 识别官方及历史中转供应商。
+- 按供应商查看未归档主会话、归档会话和子会话，并支持按标题、项目路径或会话 ID 搜索。
+- 将可识别的子会话归入主会话并折叠展示；来源显示子 agent 名称，无法识别时显示“未命名”。
+- 将其他供应商中的主会话复制到当前正在使用的供应商，并保留来源会话。
+- 将其他供应商中的主会话迁移到当前供应商，成功后删除来源会话。
+- 双向同步“来源已更新”或“副本已更新”的已关联会话，直接更新原有会话，不创建第三条会话。
+- 按供应商清理已归档会话或未归档子会话，执行前展示清理预览和风险提示。
+- 复制或迁移后尝试刷新会话索引；必要时提示用户决定是否重启 Codex Desktop。
+- 检查、下载并安装新版本。
 
-`dist` 是本地预览目录，只保存便携客户端；运行预览程序后会在同级生成运行数据目录：
+## 使用方式
 
-```text
-dist/
-├─ 711EV-Codex-Tool.exe                  # Windows 便携客户端
-├─ 711EV-Codex-Tool.app                  # macOS（在 macOS 构建）
-└─ CodexLocalSync.data/                  # 首次运行后生成
-```
+1. 启动工具，等待存储位置、供应商和会话扫描完成。
+2. 如果检测到多个存储位置，先在顶部选择需要操作的存储位置。
+3. 在左侧选择来源供应商，在中间勾选状态为“可复制”的会话。
+4. 确认右侧显示的来源供应商和目标供应商。目标始终是当前配置正在使用的供应商。
+5. 选择“复制”或“迁移”，查看预览后确认执行。
+6. 后续任意一侧产生新内容时，切换到当前供应商并使用“同步会话”。
 
-首次运行时，程序会在可执行文件同级创建：
+### 复制
+
+复制通过 Codex App Server 的 `thread/fork` 创建新的 Thread ID，并将新会话归入当前供应商。原始会话、Thread ID、供应商和 rollout 均保持不变。
+
+复制完成后，工具会保存来源与副本的关联关系。只要其中一侧单独产生新内容，就可以通过“同步会话”更新另一侧。
+
+### 迁移
+
+迁移会先在当前供应商创建并验证新会话，验证成功后再删除来源供应商中的原始会话。迁移后的目标会话显示为“当前”，不会保留可同步的复制关系。
+
+迁移不是备份操作。来源会话删除后无法通过本工具恢复。
+
+### 同步会话
+
+“同步会话”只在当前正在使用的供应商中显示，并且只处理仍然有效、未归档且状态为“来源已更新”或“副本已更新”的会话：
+
+- 来源已更新：使用来源的最新内容更新现有副本。
+- 副本已更新：使用副本的最新内容更新现有来源会话。
+- 两侧都已更新：标记为冲突并跳过，不自动覆盖任意一侧。
+
+同步保留两侧原有 Thread ID。如果来源或副本任意一侧被归档，工具会立即解除关联；以后即使还原归档，也不会恢复原关联关系。
+
+### 清理会话
+
+- 清理归档：永久删除当前所选供应商中的已归档会话。
+- 清理子会话：永久删除当前所选供应商中的未归档子会话，不影响其所属主会话。
+
+清理功能会先列出待删除数量和具体会话。若本地 rollout 已经不存在，则按已删除处理，不计为失败。
+
+## 会话状态
+
+| 状态 | 含义 |
+| --- | --- |
+| 可复制 | 其他供应商中的未归档主会话，可以复制或迁移到当前供应商 |
+| 当前 | 会话已经属于当前正在使用的供应商 |
+| 已归档 | 本地归档会话，不参与复制或同步 |
+| 子会话 | 子 agent 等内部会话，不参与复制或同步 |
+| 无效 | rollout、供应商或关联信息不完整，无法安全操作 |
+| 已复制 | 来源会话已经存在经过验证的副本 |
+| 副本 | 工具创建并验证过的目标会话 |
+| 来源已更新 | 复制后来源会话又产生了新内容 |
+| 副本已更新 | 复制后目标副本又产生了新内容 |
+
+状态会在首次启动、切换供应商、切换存储位置和手动刷新时根据本地会话重新计算，不以界面缓存作为最终结果。
+
+## 数据与隐私
+
+程序会在可执行文件同级创建 `CodexLocalSync.data`：
 
 ```text
 CodexLocalSync.data/
+├─ app.sqlite       # 存储位置、供应商和复制关联
+├─ app.sqlite-wal
+├─ app.sqlite-shm
+├─ profiles/        # 工具托管的配置目录
+└─ locks/           # 防止同一存储位置被并发修改
 ```
 
-该目录包含工具数据库、托管 Profile 和操作锁。工具数据库只保存来源 Thread 与副本 Thread 的映射，不保存聊天正文。若同级目录需要管理员权限，程序只在初始化阶段请求一次授权并把目录权限授予当前用户。
+工具数据库只保存发现的存储位置、供应商信息、来源与副本 Thread ID、内容哈希及关联状态，不保存聊天正文。聊天内容只在本机 Codex rollout 之间处理，不会由本工具上传到第三方服务。
 
-Windows 和 macOS 分别在对应系统执行打包命令。Windows 同时生成便携 `.exe` 和 NSIS 安装程序；安装时可以选择目录，完成页默认勾选“创建桌面快捷方式”和“运行应用”。主程序文件名为 `711EV-Codex-Tool.exe`，快捷方式名称为 `711EVCodex工具`。macOS 生成 Finder 中的单个 `.app`。运行数据都放在客户端同级的 `CodexLocalSync.data` 中，覆盖升级不会删除该目录。
+本工具不会同步或复制：
 
-## 构建
+- `auth.json`、登录令牌、API Key 或账号凭据
+- Skills、Plugins 和其他 Codex 扩展配置
+- ChatGPT 模式中的云端聊天记录
+- 子 agent 会话及其运行状态
+
+本工具不是备份软件，不创建会话备份，也不直接修改官方 Codex SQLite。复制和迁移使用 Codex App Server 创建、读取和删除 Thread；同步只更新已经建立关联的本地 rollout。
+
+## 运行文件
+
+本地构建后的预览文件位于 `dist`：
+
+```text
+dist/
+├─ 711EV-Codex-Tool.exe     # Windows 便携客户端
+├─ 711EV-Codex-Tool.app     # macOS 本地构建产物
+└─ CodexLocalSync.data/     # 首次运行后生成并在后续构建中保留
+```
+
+Windows 主程序文件名为 `711EV-Codex-Tool.exe`，桌面快捷方式名称为 `711EVCodex工具`。macOS 构建支持 Intel 和 Apple Silicon。
+
+如果客户端所在目录不可写，程序只在初始化 `CodexLocalSync.data` 时请求系统授权，并把该目录权限授予当前用户。覆盖升级不会主动删除本地运行数据。
+
+## 本地开发
+
+需要 Node.js 20、Rust stable 及对应平台的 Tauri 构建环境：
 
 ```bash
 npm install
 npm run build
 ```
 
-`npm run build` 是本地打包入口。该命令执行 TypeScript 检查、前端构建和 Tauri 桌面打包，自动增加补丁版本号，并把预览程序放入 `dist`。Tauri 原始构建产物保存在 `src-tauri/target`，打包时始终保留 `dist/CodexLocalSync.data` 运行数据。
+`npm run build` 会执行 TypeScript 检查、Vite 前端构建和 Tauri 桌面打包，并自动将补丁版本号增加一位。构建失败时会恢复原版本文件。
 
-Windows 升级包使用 Tauri 签名。默认私钥路径为：
+完整桌面打包需要开发者自行提供 Tauri 更新签名私钥，私钥不得提交到仓库。
 
-```text
-C:\Users\当前用户名\.tauri\711ev-codex-tool.key
-```
-
-私钥只存在于发布电脑，不会进入 Git、安装程序或用户目录。必须单独安全备份；丢失私钥后，已安装的旧客户端无法验证后续升级。需要改用其他磁盘时，通过 `TAURI_SIGNING_PRIVATE_KEY_PATH` 指定绝对路径。
-
-## 发布到 GitHub Releases
-
-远程仓库为 `https://github.com/711EV/711EV-Codex-Tool`。仓库需要配置 Actions Secret `TAURI_SIGNING_PRIVATE_KEY`，内容为 Tauri 更新私钥。推送版本标签后，GitHub Actions 会自动构建 Windows 和 macOS Universal 版本，生成跨平台 `latest.json` 并创建 GitHub Release：
-
-```powershell
-npm run build
-
-$version = (Get-Content package.json | ConvertFrom-Json).version
-git add .
-git commit -m "release: $version"
-git tag "v$version"
-git push origin master
-git push origin "v$version"
-```
-
-Actions 发布内容包括 Windows 便携版、Windows 安装版、macOS Intel/Apple Silicon Universal DMG、两端更新包签名和 `latest.json`。客户端的“检查更新”读取 GitHub 最新 Release 中的公开 `latest.json`，用户端不需要 GitHub 令牌。`CodexLocalSync.data` 是本机运行数据，不会上传。
+- 前端静态资源：`build/`
+- 本地预览程序：`dist/`
+- Tauri 原始构建产物：`src-tauri/target/`
 
 测试命令：
 
@@ -73,16 +138,17 @@ cargo test
 cargo check
 ```
 
-## 同步边界
+## 当前限制
 
-- 启动时自动发现当前 `CODEX_HOME`、`~/.codex`、运行中的 Codex/ChatGPT 客户端、工具自身托管目录和受支持切换工具的本地实例；也可在侧栏手动重新发现。
-- 发现过程只扫描有限的标准位置、实例清单和已验证实例的同级目录，不全盘搜索磁盘。自定义目录可通过 `CODEX_SYNC_DISCOVERY_ROOTS`（系统路径列表）加入发现范围。
-- 每个物理 `CODEX_HOME` 只对应一个本地目录；Provider 分组来自当前配置和历史 rollout 的真实 `model_provider`。
-- 当前配置生效的 Provider 固定为复制目标，不能选择另一个已有会话作为覆盖目标。
-- 每条成功结果由官方 App Server `thread/fork` 创建新的 Thread ID，来源 rollout、来源 Thread ID 和来源 Provider 保持不变。
-- 只允许复制 `sessions` 中未归档的 `cli` / `vscode` 主会话；subagent 等内部线程不参与复制，可按当前供应商单独预览并清理。
-- 不同步 `auth.json`、Token、API Key、Skills、Plugins 或 ChatGPT 云端聊天。
-- 发现器不会读取 `auth.json` 内容，也不会仅凭一个同名文件判断实例。已删除、已移动且没有任何本地路径引用的历史实例无法自动恢复。
-- 写入前会尝试正常关闭匹配当前 Home 的客户端；超时后必须在 UI 中确认才能强制结束。
-- 新流程不创建备份，不直接写官方 Codex SQLite；验证失败时只删除本次创建且尚未交付的副本。
-- 已验证映射保持幂等。来源后续更新时不会覆盖可能已经继续聊天的旧副本。
+- 目标供应商由当前 `config.toml` 决定，不能在工具中选择任意供应商作为目标。
+- “供应商配置”和手动添加存储位置仍为待开发功能；当前只能重新发现已有存储位置下的供应商。
+- 只复制来源为 CLI 或客户端的未归档主会话，不复制子会话。
+- 只能处理本机存在的 Codex rollout；已彻底删除且没有任何本地路径引用的历史会话无法恢复。
+- 两侧同时更新时不会自动合并，需要用户自行决定保留哪一侧内容。
+- 对正在使用的存储位置执行写操作前，会尝试正常关闭匹配的 Desktop 客户端；超时后必须由用户确认是否强制结束，以免中断正在运行的任务。
+
+## 相关链接
+
+- [711EV 导航](https://www.711ev.com/)
+- [711EV 中转站](https://ai.711ev.com/)
+- [QQ 交流群](https://qm.qq.com/q/e9xHZxgN4Q)
