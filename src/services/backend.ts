@@ -7,7 +7,10 @@ import type {
   InvalidChildCleanupPreview,
   InvalidChildCleanupResult,
   Profile,
-  ProfileInput,
+  ProviderConfigInput,
+  ProviderConfigTemplate,
+  ProviderConfigView,
+  ProviderSwitchResult,
   ProviderBucket,
   ProviderSessionRecord,
   ProviderWorkspaceSnapshot,
@@ -24,7 +27,6 @@ const demoProfiles: Profile[] = [
     id: "demo-account",
     name: "当前登录账号",
     kind: "chat_gpt_account",
-    mode: "external",
     codexHome: "~/.codex",
     providerId: "custom",
     appPath: null,
@@ -42,19 +44,18 @@ const demoProfiles: Profile[] = [
     id: "demo-relay",
     name: "开发 API",
     kind: "custom_api",
-    mode: "managed",
-    codexHome: "CodexLocalSync.data/profiles/development-api",
+    codexHome: "~/.codex-development",
     providerId: "relay",
     appPath: null,
-    discoverySource: "Codex Local Sync 托管实例",
+    discoverySource: "已发现的存储位置",
     providers: [
-      { id: "openai", sourceFile: "CodexLocalSync.data/profiles/development-api/config.toml", active: false },
-      { id: "relay", sourceFile: "CodexLocalSync.data/profiles/development-api/config.toml", active: true },
+      { id: "openai", sourceFile: "~/.codex-development/config.toml", active: false },
+      { id: "relay", sourceFile: "~/.codex-development/config.toml", active: true },
     ],
     configProfiles: [
       {
         name: "development",
-        sourceFile: "CodexLocalSync.data/profiles/development-api/development.config.toml",
+        sourceFile: "~/.codex-development/development.config.toml",
         providerId: "relay",
         active: true,
       },
@@ -102,6 +103,7 @@ const demoProviderBuckets: ProviderBucket[] = [
     archivedThreadCount: 0,
     internalThreadCount: 0,
     replicatedCount: 0,
+    configured: true,
   },
   {
     profileId: "demo-account",
@@ -111,6 +113,7 @@ const demoProviderBuckets: ProviderBucket[] = [
     archivedThreadCount: 0,
     internalThreadCount: 1,
     replicatedCount: 0,
+    configured: true,
   },
   {
     profileId: "demo-account",
@@ -120,6 +123,7 @@ const demoProviderBuckets: ProviderBucket[] = [
     archivedThreadCount: 1,
     internalThreadCount: 1,
     replicatedCount: 2,
+    configured: true,
   },
   {
     profileId: "demo-account",
@@ -129,6 +133,7 @@ const demoProviderBuckets: ProviderBucket[] = [
     archivedThreadCount: 0,
     internalThreadCount: 1,
     replicatedCount: 0,
+    configured: false,
   },
 ];
 
@@ -199,20 +204,6 @@ export const backend = {
     return invoke<AppState>("get_app_state");
   },
 
-  async createProfile(input: ProfileInput): Promise<Profile> {
-    if (!isTauri()) {
-      throw new Error("浏览器预览模式不能修改 Profile");
-    }
-    return invoke<Profile>("create_profile", { input });
-  },
-
-  async deleteProfile(profileId: string): Promise<void> {
-    if (!isTauri()) {
-      throw new Error("浏览器预览模式不能修改 Profile");
-    }
-    return invoke("delete_profile", { profileId });
-  },
-
   async discoverProfiles(): Promise<DiscoveryReport> {
     if (!isTauri()) {
       return {
@@ -224,6 +215,73 @@ export const backend = {
       };
     }
     return invoke<DiscoveryReport>("discover_profiles");
+  },
+
+  async providerConfigTemplates(): Promise<ProviderConfigTemplate[]> {
+    if (!isTauri()) {
+      return [{
+        id: "711ev",
+        fixedProviderId: "711EV",
+        fixedBaseUrl: "https://ai.711ev.com/v1",
+      }];
+    }
+    return invoke<ProviderConfigTemplate[]>("provider_config_templates");
+  },
+
+  async providerConfigRead(profileId: string, providerId: string): Promise<ProviderConfigView> {
+    if (!isTauri()) {
+      const isOfficial = providerId.toLocaleLowerCase() === "openai";
+      const configured = isOfficial || providerId !== "SHUAI-API";
+      return {
+        profileId,
+        providerId,
+        baseUrl: isOfficial ? null : providerId === "711EV" ? "https://ai.711ev.com/v1" : "https://api.example.com/v1",
+        envKey: null,
+        requiresOpenaiAuth: isOfficial ? null : true,
+        experimentalBearerTokenPresent: !isOfficial,
+        authJsonApiKeyPresent: !isOfficial,
+        activeKeyFilesMatchDatabase: !isOfficial,
+        configFile: "~/.codex/config.toml",
+        authFile: "~/.codex/auth.json",
+        authKind: isOfficial ? "oauth" : "database_api_key",
+        authStorage: "file",
+        officialAuthSnapshotStatus: isOfficial ? "available" : "missing",
+        officialAuthCapturedAt: null,
+        apiKeyMasked: isOfficial ? null : "sk-••••...demo",
+        managedByTool: !isOfficial,
+        configured,
+        canSwitch: configured,
+        hasPendingChanges: false,
+        configFingerprint: "preview",
+      };
+    }
+    return invoke<ProviderConfigView>("provider_config_read", { profileId, providerId });
+  },
+
+  async providerConfigRevealKey(profileId: string, providerId: string): Promise<string> {
+    if (!isTauri()) return "sk-demo-provider-key";
+    return invoke<string>("provider_config_reveal_key", { profileId, providerId });
+  },
+
+  async providerConfigSave(input: ProviderConfigInput): Promise<ProviderConfigView> {
+    if (!isTauri()) {
+      return this.providerConfigRead(input.profileId, input.providerId);
+    }
+    return invoke<ProviderConfigView>("provider_config_save", { input });
+  },
+
+  async providerSwitch(profileId: string, providerId: string): Promise<ProviderSwitchResult> {
+    if (!isTauri()) {
+      return {
+        profileId,
+        providerId,
+        configFile: "~/.codex/config.toml",
+        authFile: "~/.codex/auth.json",
+        restarted: false,
+        warning: null,
+      };
+    }
+    return invoke<ProviderSwitchResult>("provider_switch", { profileId, providerId });
   },
 
   async scanSessions(profileId?: string): Promise<SessionRecord[]> {

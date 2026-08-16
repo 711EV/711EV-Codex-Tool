@@ -1,77 +1,11 @@
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use chrono::Utc;
 use uuid::Uuid;
 
 use crate::discovery::DiscoveredInstance;
-use crate::error::{AppError, AppResult};
-use crate::models::{DiscoveredProvider, Profile, ProfileInput, ProfileMode};
-
-pub fn create(data_dir: &Path, input: ProfileInput) -> AppResult<Profile> {
-    let name = input.name.trim();
-    if name.is_empty() {
-        return Err(AppError::Message("profile name is required".into()));
-    }
-    let provider_id = input.provider_id.trim();
-    if provider_id.is_empty() || !provider_id.chars().all(valid_provider_character) {
-        return Err(AppError::Message(
-            "provider id may only contain letters, numbers, dot, dash, and underscore".into(),
-        ));
-    }
-
-    let id = Uuid::new_v4().to_string();
-    let codex_home = match input.mode {
-        ProfileMode::Managed => data_dir.join("profiles").join(&id),
-        ProfileMode::External => {
-            let value = input
-                .codex_home
-                .as_deref()
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .ok_or_else(|| AppError::Message("CODEX_HOME is required".into()))?;
-            PathBuf::from(value)
-        }
-    };
-    if input.mode == ProfileMode::Managed {
-        fs::create_dir_all(codex_home.join("sessions"))?;
-        fs::create_dir_all(codex_home.join("archived_sessions"))?;
-        let config = codex_home.join("config.toml");
-        if !config.exists() {
-            fs::write(&config, format!("model_provider = \"{provider_id}\"\n"))?;
-        }
-    } else if !codex_home.is_dir() {
-        return Err(AppError::InvalidPath(format!(
-            "external CODEX_HOME does not exist: {}",
-            codex_home.display()
-        )));
-    }
-
-    let timestamp = Utc::now().to_rfc3339();
-    let discovery_source = if input.mode == ProfileMode::Managed {
-        "手动创建的托管实例"
-    } else {
-        "手动添加"
-    };
-    Ok(Profile {
-        id,
-        name: name.to_string(),
-        kind: input.kind,
-        mode: input.mode,
-        codex_home: absolute_display(&codex_home),
-        provider_id: provider_id.to_string(),
-        app_path: input.app_path.filter(|value| !value.trim().is_empty()),
-        discovery_source: discovery_source.into(),
-        providers: vec![DiscoveredProvider {
-            id: provider_id.to_string(),
-            source_file: codex_home.join("config.toml").to_string_lossy().to_string(),
-            active: true,
-        }],
-        config_profiles: Vec::new(),
-        created_at: timestamp.clone(),
-        updated_at: timestamp,
-    })
-}
+use crate::models::Profile;
 
 pub fn from_discovery(instance: DiscoveredInstance) -> Profile {
     let timestamp = Utc::now().to_rfc3339();
@@ -79,7 +13,6 @@ pub fn from_discovery(instance: DiscoveredInstance) -> Profile {
         id: Uuid::new_v4().to_string(),
         name: instance.name,
         kind: instance.kind,
-        mode: ProfileMode::External,
         codex_home: instance.home.to_string_lossy().to_string(),
         provider_id: instance.provider_id,
         app_path: instance.app_path,
@@ -136,13 +69,6 @@ pub fn read_provider(home: &Path, fallback: &str) -> String {
 
 fn valid_provider_character(value: char) -> bool {
     value.is_ascii_alphanumeric() || matches!(value, '.' | '-' | '_')
-}
-
-fn absolute_display(path: &Path) -> String {
-    fs::canonicalize(path)
-        .unwrap_or_else(|_| path.to_path_buf())
-        .to_string_lossy()
-        .to_string()
 }
 
 #[cfg(test)]

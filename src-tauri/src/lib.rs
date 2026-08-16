@@ -5,20 +5,21 @@ mod models;
 pub mod portable;
 mod process;
 mod profiles;
+mod provider_config;
 mod replication;
 mod sessions;
 mod store;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use tauri::Manager;
 
 use models::{
-    AppState, ArchiveCleanupPreview, ArchiveCleanupResult, DiscoveryReport, Profile, ProfileInput,
-    ProviderWorkspaceSnapshot, ReplicaMapping, ReplicationPreview, ReplicationResult,
-    SessionRecord, UpdateSyncPreview,
+    AppState, ArchiveCleanupPreview, ArchiveCleanupResult, DiscoveryReport, ProviderConfigInput,
+    ProviderConfigTemplate, ProviderConfigView, ProviderSwitchResult, ProviderWorkspaceSnapshot,
+    ReplicaMapping, ReplicationPreview, ReplicationResult, SessionRecord, UpdateSyncPreview,
 };
 use store::Store;
 
@@ -54,28 +55,66 @@ fn get_app_state(context: tauri::State<'_, AppContext>) -> Result<AppState, Stri
 }
 
 #[tauri::command]
-fn create_profile(
-    context: tauri::State<'_, AppContext>,
-    input: ProfileInput,
-) -> Result<Profile, String> {
-    let profile = profiles::create(&context.data_dir, input).map_err(String::from)?;
-    lock_store(&context)?
-        .insert_profile(&profile)
+fn discover_profiles(context: tauri::State<'_, AppContext>) -> Result<DiscoveryReport, String> {
+    let recovery_store = Store::open(&context.data_dir).map_err(String::from)?;
+    provider_config::recover_transactions(&context.data_dir, &recovery_store)
         .map_err(String::from)?;
-    Ok(profile)
+    let report = {
+        let store = lock_store(&context)?;
+        discover_and_register(&store)?
+    };
+    provider_config::poll_official_snapshots(&context.data_dir).map_err(String::from)?;
+    Ok(report)
 }
 
 #[tauri::command]
-fn delete_profile(context: tauri::State<'_, AppContext>, profile_id: String) -> Result<(), String> {
-    lock_store(&context)?
-        .delete_profile(&profile_id)
+fn provider_config_templates() -> Vec<ProviderConfigTemplate> {
+    provider_config::templates()
+}
+
+#[tauri::command]
+fn provider_config_read(
+    context: tauri::State<'_, AppContext>,
+    profile_id: String,
+    provider_id: String,
+) -> Result<ProviderConfigView, String> {
+    let store = lock_store(&context)?;
+    provider_config::read(&context.data_dir, &store, &profile_id, &provider_id)
         .map_err(String::from)
 }
 
 #[tauri::command]
-fn discover_profiles(context: tauri::State<'_, AppContext>) -> Result<DiscoveryReport, String> {
+fn provider_config_reveal_key(
+    context: tauri::State<'_, AppContext>,
+    profile_id: String,
+    provider_id: String,
+) -> Result<String, String> {
     let store = lock_store(&context)?;
-    discover_and_register(&context.data_dir, &store)
+    provider_config::reveal_key(&store, &profile_id, &provider_id).map_err(String::from)
+}
+
+#[tauri::command]
+fn provider_config_save(
+    context: tauri::State<'_, AppContext>,
+    input: ProviderConfigInput,
+) -> Result<ProviderConfigView, String> {
+    let store = lock_store(&context)?;
+    provider_config::save(&context.data_dir, &store, input).map_err(String::from)
+}
+
+#[tauri::command]
+async fn provider_switch(
+    context: tauri::State<'_, AppContext>,
+    profile_id: String,
+    provider_id: String,
+) -> Result<ProviderSwitchResult, String> {
+    let data_dir = context.data_dir.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let store = Store::open(&data_dir).map_err(String::from)?;
+        provider_config::switch(&data_dir, &store, &profile_id, &provider_id).map_err(String::from)
+    })
+    .await
+    .map_err(|error| format!("provider switch task failed: {error}"))?
 }
 
 #[tauri::command]
@@ -129,7 +168,18 @@ async fn provider_workspace(
             .map_err(String::from)?;
         let scan = replication::provider_scan_from_snapshots(&profile, &mappings, snapshots)
             .map_err(String::from)?;
-        Ok(scan.workspace(provider_id.as_deref()))
+        let mut workspace = scan.workspace(provider_id.as_deref());
+        let configured = store
+            .list_provider_configs(&profile.id)
+            .map_err(String::from)?
+            .into_iter()
+            .map(|value| value.provider_id)
+            .collect::<HashSet<_>>();
+        for bucket in &mut workspace.provider_buckets {
+            bucket.configured = bucket.provider_id.eq_ignore_ascii_case("openai")
+                || configured.contains(&bucket.provider_id);
+        }
+        Ok(workspace)
     })
     .await
     .map_err(|error| format!("provider scan task failed: {error}"))?
@@ -362,12 +412,9 @@ fn replication_cleanup_orphans(
     replication::cleanup_orphans(&store, &profile, force_close_client).map_err(String::from)
 }
 
-fn discover_and_register(
-    data_dir: &std::path::Path,
-    store: &Store,
-) -> Result<DiscoveryReport, String> {
+fn discover_and_register(store: &Store) -> Result<DiscoveryReport, String> {
     let current = store.list_profiles().map_err(String::from)?;
-    let scan = discovery::discover(data_dir, &current);
+    let scan = discovery::discover(&current);
     let discovered_count = scan.instances.len();
     let mut by_path = current
         .iter()
@@ -386,7 +433,6 @@ fn discover_and_register(
             let mut refreshed = profiles::from_discovery(instance);
             refreshed.id = existing.id.clone();
             refreshed.name = existing.name.clone();
-            refreshed.mode = existing.mode.clone();
             refreshed.created_at = existing.created_at.clone();
             if refreshed.discovery_source == "已登记实例" {
                 refreshed.discovery_source = existing.discovery_source.clone();
@@ -429,9 +475,16 @@ pub fn run() {
         .unwrap_or_else(|error| panic!("failed to initialize portable storage: {error}"));
     let store = Store::open(&data_dir)
         .unwrap_or_else(|error| panic!("failed to open local database: {error}"));
-    if let Err(error) = discover_and_register(&data_dir, &store) {
+    if let Err(error) = provider_config::recover_transactions(&data_dir, &store) {
+        eprintln!("failed to recover provider switch transaction: {error}");
+    }
+    if let Err(error) = discover_and_register(&store) {
         eprintln!("failed to discover local profiles: {error}");
     }
+    if let Err(error) = provider_config::poll_official_snapshots(&data_dir) {
+        eprintln!("failed to capture initial official auth snapshot: {error}");
+    }
+    provider_config::start_official_snapshot_watcher(data_dir.clone());
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
@@ -456,9 +509,12 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             get_app_state,
-            create_profile,
-            delete_profile,
             discover_profiles,
+            provider_config_templates,
+            provider_config_read,
+            provider_config_reveal_key,
+            provider_config_save,
+            provider_switch,
             scan_sessions,
             provider_workspace,
             archive_cleanup_preview,

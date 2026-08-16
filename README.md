@@ -6,7 +6,7 @@
 
 ## 功能
 
-- 自动发现当前 `CODEX_HOME`、默认 `~/.codex`、运行中的 Codex/ChatGPT 客户端、工具托管目录和受支持切换工具中的存储位置。
+- 自动发现当前 `CODEX_HOME`、默认 `~/.codex`、运行中的 Codex/ChatGPT 客户端和受支持切换工具中的存储位置。
 - 支持切换已发现的多个存储位置；只有一个位置时保留切换按钮但不可点击。
 - 根据当前配置和本地 rollout 的 `model_provider` 识别官方及历史中转供应商。
 - 按供应商查看未归档主会话、归档会话和子会话，并支持按标题、项目路径或会话 ID 搜索。
@@ -81,7 +81,6 @@ CodexLocalSync.data/
 ├─ app.sqlite       # 存储位置、供应商和复制关联
 ├─ app.sqlite-wal
 ├─ app.sqlite-shm
-├─ profiles/        # 工具托管的配置目录
 └─ locks/           # 防止同一存储位置被并发修改
 ```
 

@@ -59,9 +59,9 @@ struct ManagedInstanceReference {
     user_data_dir: String,
 }
 
-pub fn discover(data_dir: &Path, known_profiles: &[Profile]) -> DiscoveryScan {
+pub fn discover(known_profiles: &[Profile]) -> DiscoveryScan {
     let mut candidates = Vec::new();
-    collect_standard_candidates(data_dir, &mut candidates);
+    collect_standard_candidates(&mut candidates);
     collect_process_candidates(&mut candidates);
     collect_managed_metadata_candidates(&mut candidates);
     for profile in known_profiles {
@@ -77,7 +77,7 @@ pub fn discover(data_dir: &Path, known_profiles: &[Profile]) -> DiscoveryScan {
     discover_candidates(candidates)
 }
 
-fn collect_standard_candidates(data_dir: &Path, candidates: &mut Vec<Candidate>) {
+fn collect_standard_candidates(candidates: &mut Vec<Candidate>) {
     if let Some(path) = std::env::var_os("CODEX_HOME").map(PathBuf::from) {
         push_candidate(candidates, path, "CODEX_HOME 环境变量", None, None);
     }
@@ -98,12 +98,6 @@ fn collect_standard_candidates(data_dir: &Path, candidates: &mut Vec<Candidate>)
             );
         }
     }
-
-    collect_directories(
-        &data_dir.join("profiles"),
-        "Codex Local Sync 托管实例",
-        candidates,
-    );
 
     if let Some(extra_roots) = std::env::var_os("CODEX_SYNC_DISCOVERY_ROOTS") {
         for root in std::env::split_paths(&extra_roots) {

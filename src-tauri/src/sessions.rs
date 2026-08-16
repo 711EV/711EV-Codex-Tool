@@ -670,7 +670,6 @@ mod tests {
             id: "profile".into(),
             name: "profile".into(),
             kind: crate::models::ProfileKind::CustomApi,
-            mode: crate::models::ProfileMode::External,
             codex_home: root.path().to_string_lossy().to_string(),
             provider_id: "openai".into(),
             app_path: None,

@@ -5,7 +5,9 @@ import type {
   AppState,
   ArchiveCleanupPreview,
   InvalidChildCleanupPreview,
-  ProfileInput,
+  ProviderConfigInput,
+  ProviderConfigTemplate,
+  ProviderConfigView,
   ProviderBucket,
   ProviderSessionRecord,
   ProviderWorkspaceSnapshot,
@@ -35,6 +37,11 @@ export const useWorkspaceStore = defineStore("workspace", () => {
   const discovering = ref(false);
   const error = ref<string | null>(null);
   const lastResult = ref<ReplicationResult | null>(null);
+  const providerConfig = ref<ProviderConfigView | null>(null);
+  const providerConfigTemplates = ref<ProviderConfigTemplate[]>([]);
+  const providerConfigLoading = ref(false);
+  const providerConfigSaving = ref(false);
+  const providerConfigSwitching = ref(false);
 
   const profiles = computed(() => appState.value?.profiles ?? []);
   const activeProfile = computed(() =>
@@ -70,6 +77,7 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     error.value = null;
     try {
       appState.value = await backend.getAppState();
+      providerConfigTemplates.value = await backend.providerConfigTemplates();
       activeProfileId.value ||= profiles.value[0]?.id ?? null;
       await refreshProviders();
     } catch (reason) {
@@ -94,6 +102,7 @@ export const useWorkspaceStore = defineStore("workspace", () => {
         activeProfileId.value,
         selectedProviderId.value,
       ));
+      await loadProviderConfig();
     } catch (reason) {
       error.value = messageOf(reason);
     } finally {
@@ -114,6 +123,7 @@ export const useWorkspaceStore = defineStore("workspace", () => {
         activeProfileId.value,
         selectedProviderId.value,
       ));
+      await loadProviderConfig();
     } catch (reason) {
       error.value = messageOf(reason);
     } finally {
@@ -131,6 +141,74 @@ export const useWorkspaceStore = defineStore("workspace", () => {
         .map((session) => session.threadId),
     );
     selectedThreadIds.value = selectedThreadIds.value.filter((id) => available.has(id));
+  }
+
+  async function loadProviderConfig() {
+    if (!activeProfileId.value || !selectedProviderId.value) {
+      providerConfig.value = null;
+      return;
+    }
+    providerConfigLoading.value = true;
+    try {
+      providerConfig.value = await backend.providerConfigRead(
+        activeProfileId.value,
+        selectedProviderId.value,
+      );
+    } catch (reason) {
+      providerConfig.value = null;
+      error.value = messageOf(reason);
+    } finally {
+      providerConfigLoading.value = false;
+    }
+  }
+
+  async function saveProviderConfig(input: ProviderConfigInput) {
+    providerConfigSaving.value = true;
+    error.value = null;
+    try {
+      const saved = await backend.providerConfigSave(input);
+      await refreshProviders();
+      if (selectedProviderId.value !== saved.providerId) {
+        await selectProvider(saved.providerId);
+      }
+      return saved;
+    } catch (reason) {
+      error.value = messageOf(reason);
+      throw reason;
+    } finally {
+      providerConfigSaving.value = false;
+    }
+  }
+
+  async function revealProviderApiKey(profileId: string, providerId: string) {
+    return backend.providerConfigRevealKey(profileId, providerId);
+  }
+
+  async function switchProvider(providerId: string) {
+    if (!activeProfileId.value || providerConfigSwitching.value) {
+      throw new Error("未选择存储位置或供应商切换正在进行");
+    }
+    const startedAt = Date.now();
+    providerConfigSwitching.value = true;
+    error.value = null;
+    try {
+      await nextTick();
+      if (typeof requestAnimationFrame === "function") {
+        await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+      }
+      const result = await backend.providerSwitch(activeProfileId.value, providerId);
+      await refreshProviders();
+      return result;
+    } catch (reason) {
+      error.value = messageOf(reason);
+      throw reason;
+    } finally {
+      const remaining = PROVIDER_SWITCH_MIN_MS - (Date.now() - startedAt);
+      if (remaining > 0) {
+        await new Promise<void>((resolve) => window.setTimeout(resolve, remaining));
+      }
+      providerConfigSwitching.value = false;
+    }
   }
 
   async function selectProfile(profileId: string) {
@@ -177,22 +255,6 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     selectedThreadIds.value = allSelected
       ? selectedThreadIds.value.filter((id) => !visible.includes(id))
       : [...new Set([...selectedThreadIds.value, ...visible])];
-  }
-
-  async function createProfile(input: ProfileInput) {
-    const profile = await backend.createProfile(input);
-    appState.value = await backend.getAppState();
-    await selectProfile(profile.id);
-  }
-
-  async function deleteProfile(profileId: string) {
-    await backend.deleteProfile(profileId);
-    appState.value = await backend.getAppState();
-    if (activeProfileId.value === profileId) {
-      activeProfileId.value = profiles.value[0]?.id ?? null;
-    }
-    selectedProviderId.value = null;
-    await refreshProviders();
   }
 
   async function discoverProfiles() {
@@ -397,6 +459,11 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     discovering,
     error,
     lastResult,
+    providerConfig,
+    providerConfigTemplates,
+    providerConfigLoading,
+    providerConfigSaving,
+    providerConfigSwitching,
     profiles,
     activeProfile,
     selectedProvider,
@@ -412,8 +479,6 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     selectProvider,
     toggleThread,
     selectAllVisible,
-    createProfile,
-    deleteProfile,
     discoverProfiles,
     previewArchivedCleanup,
     cleanupArchivedSessions,
@@ -425,6 +490,10 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     restartCodexClient,
     previewUpdatedSessions,
     syncUpdatedSessions,
+    loadProviderConfig,
+    revealProviderApiKey,
+    saveProviderConfig,
+    switchProvider,
   };
 });
 

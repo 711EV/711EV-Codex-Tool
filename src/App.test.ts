@@ -15,6 +15,21 @@ describe("Codex Provider Sync workspace", () => {
     vi.restoreAllMocks();
   });
 
+  it("prevents the WebView context menu throughout the application", async () => {
+    const wrapper = mount(App, {
+      global: { plugins: [createPinia()] },
+    });
+    await flushPromises();
+
+    const contextMenu = new MouseEvent("contextmenu", {
+      bubbles: true,
+      cancelable: true,
+    });
+    wrapper.get(".app-frame").element.dispatchEvent(contextMenu);
+
+    expect(contextMenu.defaultPrevented).toBe(true);
+  });
+
   it("groups sessions by Provider and fixes the current Provider as target", async () => {
     const wrapper = mount(App, {
       global: { plugins: [createPinia()] },
@@ -26,7 +41,7 @@ describe("Codex Provider Sync workspace", () => {
     expect(wrapper.find(".desktop-titlebar-logo").attributes("src")).toContain("titlebar-logo-clear.png");
     expect(wrapper.findAll(".desktop-window-button")).toHaveLength(3);
     expect(wrapper.find(".sidebar-heading > span").text()).toBe("供应商");
-    expect(wrapper.findAll(".sidebar-actions button")).toHaveLength(1);
+    expect(wrapper.findAll(".sidebar-actions button")).toHaveLength(2);
     expect(wrapper.get('[data-testid="rediscover-providers"]').attributes("title"))
       .toBe("重新发现供应商");
     expect(wrapper.find('.sidebar-actions button[title="添加 CODEX_HOME"]').exists()).toBe(false);
@@ -36,6 +51,8 @@ describe("Codex Provider Sync workspace", () => {
     expect(wrapper.get('[data-testid="check-application-update"]').text()).toBe("");
     expect(wrapper.get('[data-testid="check-application-update"]').attributes("title"))
       .toBe("检查更新");
+    expect(wrapper.find('[data-testid="check-application-update"] .lucide-download-icon').exists())
+      .toBe(true);
     expect(wrapper.find(".top-menu-storage").attributes("title")).toBe("~/.codex");
     expect(wrapper.find(".top-menu-storage").attributes("data-tooltip")).toBeUndefined();
     expect(wrapper.get('[data-testid="storage-location-switch"]').attributes("title"))
@@ -60,6 +77,10 @@ describe("Codex Provider Sync workspace", () => {
     expect(wrapper.find(".provider-list").text()).not.toContain("使用中");
     expect(wrapper.findAll(".provider-status-dot.success")).toHaveLength(1);
     expect(wrapper.findAll(".provider-status-dot.info")).toHaveLength(3);
+    expect(wrapper.findAll(".provider-switch-button")).toHaveLength(wrapper.findAll(".provider-row").length);
+    expect(wrapper.findAll(".provider-switch-button:disabled")).toHaveLength(2);
+    expect(wrapper.find('.provider-switch-button[title="请先在右侧完成供应商配置"]').exists()).toBe(true);
+    expect(wrapper.find('.provider-switch-button[title="切换到 OpenAI-API"]').exists()).toBe(true);
     expect(wrapper.findAll(".provider-row")[0].text()).toContain("openai");
     expect(wrapper.findAll(".provider-row")[0].text()).toContain("官方");
     expect(wrapper.find(".current-provider").classes()).not.toContain("active");
@@ -77,7 +98,11 @@ describe("Codex Provider Sync workspace", () => {
     expect(wrapper.find(".sync-heading").exists()).toBe(false);
     expect(wrapper.text()).not.toContain("复制到custom");
     expect(wrapper.get(".sync-provider-config-section").text()).toContain("供应商配置");
-    expect(wrapper.get(".sync-provider-config-section").text()).toContain("待开发");
+    const providerConfig = wrapper.get(".sync-provider-config-section");
+    expect(providerConfig.find(".provider-config-card-title").exists()).toBe(false);
+    expect(providerConfig.findAll(".provider-config-line").map((line) => line.text()))
+      .toEqual(expect.arrayContaining(["供应商OpenAI-API（中转）"]));
+    expect(providerConfig.text()).not.toContain("请求格式");
     expect(wrapper.findAll(".sync-pane > section")).toHaveLength(2);
     expect(wrapper.findAll(".provider-route-card")).toHaveLength(2);
     expect(wrapper.findAll(".provider-route-node .route-label").map((label) => label.text()))
@@ -106,6 +131,136 @@ describe("Codex Provider Sync workspace", () => {
     expect(wrapper.findAll(".session-row").every((row) => row.attributes("title") === undefined)).toBe(true);
   });
 
+  it("does not expose a provider request format option", async () => {
+    const wrapper = mount(App, {
+      global: { plugins: [createPinia()] },
+    });
+    await flushPromises();
+
+    await wrapper.get('[data-testid="add-provider"]').trigger("click");
+    const modal = wrapper.get(".provider-config-modal");
+    expect(modal.find("select").exists()).toBe(false);
+    expect(modal.text()).toContain("API 请求地址");
+    expect(modal.get('input[type="password"]').attributes("placeholder"))
+      .toBe("示例 sk-xxxxxxxxxxxxxxxxxxx");
+    const secretToggle = modal.get('.provider-secret-toggle');
+    expect(secretToggle.attributes("title")).toBe("显示 API 密钥");
+    await secretToggle.trigger("click");
+    expect(modal.get('.provider-secret-control input').attributes("type")).toBe("text");
+    expect(secretToggle.attributes("title")).toBe("隐藏 API 密钥");
+    expect(modal.text()).not.toContain("请求格式");
+    expect(modal.text()).not.toContain("完整URL");
+    expect(modal.find(".provider-format-control").exists()).toBe(false);
+    expect(modal.text()).not.toContain("保存供应商不会切换当前 Codex");
+  });
+
+  it("prefills 711EV defaults without locking the provider fields", async () => {
+    const saveConfig = vi.spyOn(backend, "providerConfigSave");
+    const wrapper = mount(App, {
+      global: { plugins: [createPinia()] },
+    });
+    await flushPromises();
+
+    await wrapper.get('[data-testid="add-provider"]').trigger("click");
+    const modal = wrapper.get(".provider-config-modal");
+    const presetSwitch = modal.get('.provider-template-option [role="switch"]');
+    const providerIdInput = modal.get('input[placeholder="示例 711EV-Codex"]');
+    const baseUrlInput = modal.get('input[placeholder="示例 https://ai.711ev.com/v1"]');
+
+    expect(presetSwitch.attributes("aria-checked")).toBe("false");
+    await presetSwitch.trigger("click");
+    expect(presetSwitch.attributes("aria-checked")).toBe("true");
+    expect((providerIdInput.element as HTMLInputElement).value).toBe("711EV");
+    expect((baseUrlInput.element as HTMLInputElement).value).toBe("https://ai.711ev.com/v1");
+
+    await modal.get('input[type="password"]').setValue("sk-to-clear");
+    await presetSwitch.trigger("click");
+    expect(presetSwitch.attributes("aria-checked")).toBe("false");
+    expect((providerIdInput.element as HTMLInputElement).value).toBe("");
+    expect((baseUrlInput.element as HTMLInputElement).value).toBe("");
+    expect((modal.get('input[type="password"]').element as HTMLInputElement).value).toBe("");
+
+    await presetSwitch.trigger("click");
+
+    await providerIdInput.setValue("custom-711");
+    await baseUrlInput.setValue("https://custom.example/v1");
+    await modal.get('input[type="password"]').setValue("sk-custom");
+    await modal.get(".primary-button").trigger("click");
+    await flushPromises();
+
+    expect(saveConfig).toHaveBeenCalledWith(expect.objectContaining({
+      providerId: "custom-711",
+      baseUrl: "https://custom.example/v1",
+      template: "711ev",
+    }));
+  });
+
+  it("uses the provider ID as the only provider name field", async () => {
+    const saveConfig = vi.spyOn(backend, "providerConfigSave");
+    const wrapper = mount(App, {
+      global: { plugins: [createPinia()] },
+    });
+    await flushPromises();
+
+    await wrapper.get('[data-testid="add-provider"]').trigger("click");
+    const modal = wrapper.get(".provider-config-modal");
+    expect(modal.text()).toContain("供应商");
+    expect(modal.text()).not.toContain("供应商 ID");
+    expect(modal.text()).not.toContain("显示名称");
+
+    const providerIdField = modal.findAll(".provider-config-field")
+      .find((field) => field.text().startsWith("供应商"));
+    expect(providerIdField).toBeDefined();
+    await providerIdField!.get("input").setValue(" relay ");
+    await modal.get(".primary-button").trigger("click");
+    await flushPromises();
+
+    expect(saveConfig).toHaveBeenCalledWith(expect.objectContaining({ providerId: "relay" }));
+    expect(saveConfig.mock.calls[0][0]).not.toHaveProperty("displayName");
+  });
+
+  it("uses the unified information prompt for an unconfigured provider", async () => {
+    const readProviderConfig = backend.providerConfigRead.bind(backend);
+    vi.spyOn(backend, "providerConfigRead").mockImplementation(async (profileId, providerId) => ({
+      ...await readProviderConfig(profileId, providerId),
+      configured: false,
+    }));
+    const wrapper = mount(App, {
+      global: { plugins: [createPinia()] },
+    });
+    await flushPromises();
+
+    const emptyConfig = wrapper.get(".provider-config-empty");
+    expect(emptyConfig.get(".provider-config-info-note").text())
+      .toContain("尚未配置当前供应商");
+    expect(emptyConfig.get(".provider-config-empty-copy").text())
+      .toContain("请先完成供应商配置");
+    expect(emptyConfig.get(".provider-config-empty-action").classes())
+      .toContain("primary-button");
+  });
+
+  it("hides the 711EV preset switch while editing a provider", async () => {
+    const revealKey = vi.spyOn(backend, "providerConfigRevealKey");
+    const wrapper = mount(App, {
+      global: { plugins: [createPinia()] },
+    });
+    await flushPromises();
+
+    await wrapper.get('.provider-config-heading button[title="编辑当前供应商"]').trigger("click");
+    await flushPromises();
+    const modal = wrapper.get(".provider-config-modal");
+    expect(modal.text()).toContain("编辑供应商");
+    expect(modal.find(".provider-template-option").exists()).toBe(false);
+    expect(modal.find('[aria-label="使用711EV配置"]').exists()).toBe(false);
+    expect(revealKey).toHaveBeenCalledWith("demo-account", "OpenAI-API");
+    const secretInput = modal.get('.provider-secret-control input');
+    expect((secretInput.element as HTMLInputElement).value).toBe("sk-demo-provider-key");
+    expect(secretInput.attributes("type")).toBe("password");
+    await modal.get('.provider-secret-toggle').trigger("click");
+    expect(secretInput.attributes("type")).toBe("text");
+    expect((secretInput.element as HTMLInputElement).value).toBe("sk-demo-provider-key");
+  });
+
   it("checks for a signed application update from the version footer", async () => {
     const checkUpdate = vi.spyOn(appUpdater, "check").mockResolvedValue({
       currentVersion: "0.1.65",
@@ -124,15 +279,25 @@ describe("Codex Provider Sync workspace", () => {
     await wrapper.get('[data-testid="check-application-update"]').trigger("click");
     await flushPromises();
 
-    expect(checkUpdate).toHaveBeenCalledOnce();
+    expect(checkUpdate).toHaveBeenCalledTimes(1);
+    expect(wrapper.get('[data-testid="check-application-update"]').find(".sidebar-update-badge").exists()).toBe(true);
     const modal = wrapper.get(".application-update-modal");
     expect(modal.findAll(".application-update-versions span")[0].text()).toBe("当前版本 0.1.65");
     expect(modal.findAll(".application-update-versions span")[1].text()).toBe("最新版本 0.1.66");
     expect(modal.text()).toContain("新增安装程序与在线升级。");
     expect(modal.text()).toContain("现有会话关联数据不会被覆盖");
 
-    await modal.get(".primary-button").trigger("click");
+    await modal.get(".secondary-button").trigger("click");
     await flushPromises();
+    expect(wrapper.find(".application-update-modal").exists()).toBe(false);
+    expect(wrapper.get('[data-testid="check-application-update"]').find(".sidebar-update-badge").exists()).toBe(true);
+
+    await wrapper.get('[data-testid="check-application-update"]').trigger("click");
+    await flushPromises();
+    const reopenedModal = wrapper.get(".application-update-modal");
+    await reopenedModal.get(".primary-button").trigger("click");
+    await flushPromises();
+    expect(checkUpdate).toHaveBeenCalledTimes(2);
     expect(installUpdate).toHaveBeenCalledOnce();
     expect(wrapper.get(".application-update-progress").text()).toContain("已下载 75%");
   });
@@ -174,7 +339,7 @@ describe("Codex Provider Sync workspace", () => {
 
     expect(workspace.activeProfileId).toBe("demo-relay");
     expect(wrapper.get(".top-menu-storage").attributes("title"))
-      .toBe("CodexLocalSync.data/profiles/development-api");
+      .toBe("~/.codex-development");
     expect(wrapper.find(".storage-location-menu").exists()).toBe(false);
 
     const activeProfile = workspace.activeProfile!;
@@ -636,8 +801,9 @@ describe("Codex Provider Sync workspace", () => {
     await wrapper.get(".child-cleanup-modal .danger-button").trigger("click");
     await flushPromises();
 
-    expect(wrapper.get(".confirm-modal").text()).toContain("取消清理");
-    await wrapper.get(".confirm-modal .danger-button").trigger("click");
+    expect(wrapper.get(".force-close-modal .modal-heading").text()).toContain("Codex 客户端未能正常退出");
+    expect(wrapper.get(".force-close-modal").text()).toContain("取消清理");
+    await wrapper.get(".force-close-modal .danger-button").trigger("click");
     await flushPromises();
 
     expect(cleanupExecute).toHaveBeenNthCalledWith(
@@ -647,7 +813,7 @@ describe("Codex Provider Sync workspace", () => {
       ["occupied-child"],
       true,
     );
-    expect(wrapper.find(".confirm-modal").exists()).toBe(false);
+    expect(wrapper.find(".force-close-modal").exists()).toBe(false);
     expect(wrapper.get(".child-cleanup-modal").text()).toContain("已删除1");
   });
 
@@ -796,12 +962,13 @@ describe("Codex Provider Sync workspace", () => {
     await wrapper.get(".restart-client-modal .primary-button").trigger("click");
     await flushPromises();
 
-    expect(wrapper.get(".confirm-modal").text()).toContain("取消重启");
-    await wrapper.get(".confirm-modal .danger-button").trigger("click");
+    expect(wrapper.get(".force-close-modal .modal-heading").text()).toContain("Codex 客户端未能正常退出");
+    expect(wrapper.get(".force-close-modal").text()).toContain("取消重启");
+    await wrapper.get(".force-close-modal .danger-button").trigger("click");
     await flushPromises();
 
     expect(restart).toHaveBeenNthCalledWith(2, workspace.activeProfileId, true);
-    expect(wrapper.find(".confirm-modal").exists()).toBe(false);
+    expect(wrapper.find(".force-close-modal").exists()).toBe(false);
     expect(wrapper.find(".restart-client-modal").exists()).toBe(false);
   });
 
@@ -858,6 +1025,9 @@ describe("Codex Provider Sync workspace", () => {
     expect(modal.text()).toContain("迁移会话1");
     expect(modal.text()).toContain("原会话将被永久删除且不会备份");
     expect(modal.text()).toContain("并显示为“当前”");
+    expect(modal.get(".operation-note").text()).toBe("迁移后会生成新的 Thread ID");
+    expect(modal.get(".modal-actions").findAll("button").map((button) => button.text()))
+      .toEqual(["取消", "确认迁移 1 条"]);
     expect(migrate).not.toHaveBeenCalled();
 
     await modal.get(".danger-button").trigger("click");

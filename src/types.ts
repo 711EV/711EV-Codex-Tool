@@ -1,5 +1,4 @@
 export type ProfileKind = "chat_gpt_account" | "custom_api";
-export type ProfileMode = "external" | "managed";
 
 export interface DiscoveredProvider {
   id: string;
@@ -18,7 +17,6 @@ export interface Profile {
   id: string;
   name: string;
   kind: ProfileKind;
-  mode: ProfileMode;
   codexHome: string;
   providerId: string;
   appPath: string | null;
@@ -95,6 +93,7 @@ export interface ProviderBucket {
   archivedThreadCount: number;
   internalThreadCount: number;
   replicatedCount: number;
+  configured?: boolean;
 }
 
 export interface ProviderSessionRecord {
@@ -244,11 +243,48 @@ export interface ReplicaMapping {
   deletedAt: string | null;
 }
 
-export interface ProfileInput {
-  name: string;
-  kind: ProfileKind;
-  mode: ProfileMode;
-  codexHome?: string;
+export interface ProviderConfigInput {
+  profileId: string;
   providerId: string;
-  appPath?: string;
+  baseUrl?: string | null;
+  apiKey?: string | null;
+  template?: string | null;
+}
+
+export interface ProviderConfigTemplate {
+  id: string;
+  fixedProviderId: string;
+  fixedBaseUrl: string;
+}
+
+export interface ProviderConfigView {
+  profileId: string;
+  providerId: string;
+  baseUrl: string | null;
+  envKey: string | null;
+  requiresOpenaiAuth: boolean | null;
+  experimentalBearerTokenPresent: boolean;
+  authJsonApiKeyPresent: boolean;
+  activeKeyFilesMatchDatabase: boolean;
+  configFile: string;
+  authFile: string;
+  authKind: string;
+  authStorage: string;
+  officialAuthSnapshotStatus: string;
+  officialAuthCapturedAt: string | null;
+  apiKeyMasked: string | null;
+  managedByTool: boolean;
+  configured: boolean;
+  canSwitch: boolean;
+  hasPendingChanges: boolean;
+  configFingerprint: string;
+}
+
+export interface ProviderSwitchResult {
+  profileId: string;
+  providerId: string;
+  configFile: string;
+  authFile: string;
+  restarted: boolean;
+  warning: string | null;
 }

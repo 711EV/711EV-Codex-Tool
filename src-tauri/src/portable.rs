@@ -60,13 +60,11 @@ fn launcher_directory(executable: &Path) -> AppResult<PathBuf> {
 fn prepare_data_dir(path: PathBuf) -> AppResult<PathBuf> {
     fs::create_dir_all(&path)?;
 
-    for child in ["profiles", "locks"] {
-        fs::create_dir_all(path.join(child))?;
-    }
+    fs::create_dir_all(path.join("locks"))?;
 
     // Older builds created these placeholders. remove_dir only removes empty
     // directories, so any unexpected user files are left untouched.
-    for child in ["backups", "exports", "logs", "migrations"] {
+    for child in ["profiles", "backups", "exports", "logs", "migrations"] {
         let _ = fs::remove_dir(path.join(child));
     }
 
@@ -298,7 +296,7 @@ mod tests {
             .expect("write legacy user file");
 
         let data = prepare_data_dir(data_dir).expect("prepare data");
-        assert!(data.join("profiles").is_dir());
+        assert!(!data.join("profiles").exists());
         assert!(data.join("locks").is_dir());
         assert!(!data.join("backups").exists());
         assert!(data.join("exports").join("keep.txt").is_file());

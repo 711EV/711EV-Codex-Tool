@@ -10,13 +10,6 @@ pub enum ProfileKind {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum ProfileMode {
-    External,
-    Managed,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct DiscoveredProvider {
     pub id: String,
@@ -39,7 +32,6 @@ pub struct Profile {
     pub id: String,
     pub name: String,
     pub kind: ProfileKind,
-    pub mode: ProfileMode,
     pub codex_home: String,
     pub provider_id: String,
     pub app_path: Option<String>,
@@ -56,15 +48,58 @@ impl Profile {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ProfileInput {
-    pub name: String,
-    pub kind: ProfileKind,
-    pub mode: ProfileMode,
-    pub codex_home: Option<String>,
+pub struct ProviderConfigInput {
+    pub profile_id: String,
     pub provider_id: String,
-    pub app_path: Option<String>,
+    pub base_url: Option<String>,
+    pub api_key: Option<String>,
+    pub template: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderConfigTemplate {
+    pub id: String,
+    pub fixed_provider_id: String,
+    pub fixed_base_url: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderConfigView {
+    pub profile_id: String,
+    pub provider_id: String,
+    pub base_url: Option<String>,
+    pub env_key: Option<String>,
+    pub requires_openai_auth: Option<bool>,
+    pub experimental_bearer_token_present: bool,
+    pub auth_json_api_key_present: bool,
+    pub active_key_files_match_database: bool,
+    pub config_file: String,
+    pub auth_file: String,
+    pub auth_kind: String,
+    pub auth_storage: String,
+    pub official_auth_snapshot_status: String,
+    pub official_auth_captured_at: Option<String>,
+    pub api_key_masked: Option<String>,
+    pub managed_by_tool: bool,
+    pub configured: bool,
+    pub can_switch: bool,
+    pub has_pending_changes: bool,
+    pub config_fingerprint: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderSwitchResult {
+    pub profile_id: String,
+    pub provider_id: String,
+    pub config_file: String,
+    pub auth_file: String,
+    pub restarted: bool,
+    pub warning: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -141,6 +176,7 @@ pub struct ProviderBucket {
     pub archived_thread_count: usize,
     pub internal_thread_count: usize,
     pub replicated_count: usize,
+    pub configured: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]

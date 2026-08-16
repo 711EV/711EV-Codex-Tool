@@ -122,6 +122,7 @@ pub fn provider_scan_from_snapshots(
                 archived_thread_count: 0,
                 internal_thread_count: 0,
                 replicated_count: 0,
+                configured: false,
             });
     };
     ensure_bucket(&current_provider);
@@ -160,6 +161,7 @@ pub fn provider_scan_from_snapshots(
                 archived_thread_count: 0,
                 internal_thread_count: 0,
                 replicated_count: 0,
+                configured: false,
             });
         if snapshot.archived {
             bucket.archived_thread_count += 1;
@@ -1994,14 +1996,13 @@ fn replace_file(temp: &Path, path: &Path) -> AppResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::{ProfileKind, ProfileMode};
+    use crate::models::ProfileKind;
 
     fn profile(root: &Path, provider: &str) -> Profile {
         Profile {
             id: "profile".into(),
             name: "Profile".into(),
             kind: ProfileKind::CustomApi,
-            mode: ProfileMode::External,
             codex_home: root.to_string_lossy().to_string(),
             provider_id: provider.into(),
             app_path: None,
