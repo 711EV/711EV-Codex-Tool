@@ -1,5 +1,6 @@
 {
-  "name": "codex-local-sync",
+  "name": "711ev-codex-tool",
+  "author": "711EV",
   "private": true,
   "version": "0.1.70",
   "type": "module",
