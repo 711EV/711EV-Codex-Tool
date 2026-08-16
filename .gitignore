@@ -2,8 +2,7 @@ node_modules/
 package-lock.json
 build/
 dist/
-releases/*
-!releases/release-gitea.mjs
+releases/
 docs/
 CodexLocalSync.data/
 vite-dev.log

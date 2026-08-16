@@ -19,18 +19,17 @@ dist/
 └─ CodexLocalSync.data/                  # 首次运行后生成
 ```
 
-真正上传到 Gitea 的产物统一保存在 `releases`：
+本地待发布产物统一保存在 `releases`：
 
 ```text
 releases/
-├─ 711EV-Codex-Tool.exe                  # Gitea 便携版附件
+├─ 711EV-Codex-Tool.exe                  # Windows 便携版附件
 ├─ 711EV-Codex-Tool-Setup.exe            # Windows 安装/升级程序
 ├─ 711EV-Codex-Tool-Setup.exe.sig        # 自动更新签名
-├─ latest.json                            # 在线更新清单
-└─ release-gitea.mjs                     # Gitea 发布入口
+└─ latest.json                            # 在线更新清单
 ```
 
-`releases` 中生成的程序、签名和清单均被 Git 忽略；`release-gitea.mjs` 属于发布源码，会保留在 Git 中，确保重新克隆项目后仍可发布。
+`releases` 整目录被 Git 忽略，仅用于本地构建输出。GitHub 正式版本由 `.github/workflows/release.yml` 自动构建和发布。
 
 首次运行时，程序会在可执行文件同级创建：
 
@@ -59,9 +58,9 @@ C:\Users\当前用户名\.tauri\711ev-codex-tool.key
 
 私钥只存在于发布电脑，不会进入 Git、安装程序或用户目录。必须单独安全备份；丢失私钥后，已安装的旧客户端无法验证后续升级。需要改用其他磁盘时，通过 `TAURI_SIGNING_PRIVATE_KEY_PATH` 指定绝对路径。
 
-## 发布到 Gitea Releases 和软件包
+## 发布到 GitHub Releases
 
-远程仓库为 `https://git.711ev.com/711ev/711EV-Codex-Tool`。发布脚本会把安装包和便携版作为 Gitea Release 附件供用户下载，同时把客户端自动更新所需文件发布到 Gitea Generic Packages。先在 Gitea 的“设置 -> 应用 -> 访问令牌”创建具有仓库和软件包读写权限的令牌，然后在 PowerShell 中执行：
+远程仓库为 `https://github.com/711EV/711EV-Codex-Tool`。仓库需要配置 Actions Secret `TAURI_SIGNING_PRIVATE_KEY`，内容为 Tauri 更新私钥。推送版本标签后，GitHub Actions 会自动构建 Windows 和 macOS Universal 版本，生成跨平台 `latest.json` 并创建 GitHub Release：
 
 ```powershell
 npm run build
@@ -72,26 +71,9 @@ git commit -m "release: $version"
 git tag "v$version"
 git push origin master
 git push origin "v$version"
-
-$secureToken = Read-Host "Gitea Token" -AsSecureString
-$env:GITEA_TOKEN = [Net.NetworkCredential]::new("", $secureToken).Password
-npm run release:gitea -- --notes "本次版本更新说明"
-Remove-Item Env:GITEA_TOKEN
 ```
 
-版本号以实际 `package.json` 为准。`git push` 只发布源码和版本标签；`npm run release:gitea` 才会通过 Gitea API 创建 Release，并上传以下内容：
-
-- Releases：`711EV-Codex-Tool-Setup.exe`、`711EV-Codex-Tool.exe`
-- Generic Packages：上述两个程序、签名文件和 `latest.json`
-- 不上传：`CodexLocalSync.data`，它是本机运行数据
-
-同一版本需要重新上传时，确认旧 Release 和软件包可以覆盖后执行：
-
-```powershell
-npm run release:gitea -- --replace --notes "修正后的版本说明"
-```
-
-客户端的“检查更新”读取公开地址 `https://git.711ev.com/api/packages/711ev/generic/711ev-codex-tool/latest/latest.json`，用户端不需要 Gitea 令牌。
+Actions 发布内容包括 Windows 便携版、Windows 安装版、macOS Intel/Apple Silicon Universal DMG、两端更新包签名和 `latest.json`。客户端的“检查更新”读取 GitHub 最新 Release 中的公开 `latest.json`，用户端不需要 GitHub 令牌。`CodexLocalSync.data` 是本机运行数据，不会上传。
 
 测试命令：
 

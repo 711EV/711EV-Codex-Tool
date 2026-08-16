@@ -1,0 +1,118 @@
+name: Release desktop applications
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - run: npm install --no-package-lock
+      - run: npm exec vue-tsc -- --noEmit
+      - run: npm exec vite -- build
+      - name: Build Windows applications
+        run: npm exec tauri -- build --bundles nsis
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
+      - name: Collect Windows assets
+        shell: pwsh
+        run: |
+          $version = (Get-Content package.json | ConvertFrom-Json).version
+          if ($env:GITHUB_REF_NAME -ne "v$version") {
+            throw "Tag $env:GITHUB_REF_NAME does not match package version $version"
+          }
+          $bundle = "src-tauri/target/release/bundle/nsis"
+          $installer = Get-ChildItem $bundle -File | Where-Object {
+            $_.Name -like "*_$($version)_*-setup.exe"
+          }
+          if (@($installer).Count -ne 1) { throw "Expected one NSIS installer" }
+          $signature = "$($installer.FullName).sig"
+          if (-not (Test-Path -LiteralPath $signature)) { throw "Updater signature is missing" }
+          New-Item -ItemType Directory -Path release-assets -Force | Out-Null
+          Copy-Item "src-tauri/target/release/711EV-Codex-Tool.exe" "release-assets/711EV-Codex-Tool.exe"
+          Copy-Item $installer.FullName "release-assets/711EV-Codex-Tool-Setup.exe"
+          Copy-Item $signature "release-assets/711EV-Codex-Tool-Setup.exe.sig"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-release
+          path: release-assets/*
+          if-no-files-found: error
+
+  build-macos:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - run: npm install --no-package-lock
+      - run: npm exec vue-tsc -- --noEmit
+      - run: npm exec vite -- build
+      - name: Build universal macOS applications
+        run: npm exec tauri -- build --target universal-apple-darwin --bundles app,dmg
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
+      - name: Collect macOS assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(node -p "require('./package.json').version")"
+          test "$GITHUB_REF_NAME" = "v$version"
+          bundle="src-tauri/target/universal-apple-darwin/release/bundle"
+          dmg="$(find "$bundle/dmg" -maxdepth 1 -type f -name '*.dmg' -print -quit)"
+          updater="$(find "$bundle/macos" -maxdepth 1 -type f -name '*.app.tar.gz' -print -quit)"
+          test -n "$dmg"
+          test -n "$updater"
+          test -f "$updater.sig"
+          mkdir -p release-assets
+          cp "$dmg" "release-assets/711EV-Codex-Tool-macOS-universal.dmg"
+          cp "$updater" "release-assets/711EV-Codex-Tool-macOS-universal.app.tar.gz"
+          cp "$updater.sig" "release-assets/711EV-Codex-Tool-macOS-universal.app.tar.gz.sig"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-release
+          path: release-assets/*
+          if-no-files-found: error
+
+  publish:
+    needs: [build-windows, build-macos]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: "*-release"
+          path: release-assets
+          merge-multiple: true
+      - name: Create cross-platform update manifest
+        run: node .github/scripts/create-update-manifest.mjs release-assets "$GITHUB_REPOSITORY"
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: 711EV-Codex-Tool ${{ github.ref_name }}
+          body: |
+            Windows: portable and installer packages
+            macOS: Intel / Apple Silicon universal disk image
+          files: release-assets/*
+          fail_on_unmatched_files: true

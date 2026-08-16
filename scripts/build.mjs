@@ -13,8 +13,8 @@ const portableDataDirName = "CodexLocalSync.data";
 const portableExecutableName = "711EV-Codex-Tool.exe";
 const installerName = "711EV-Codex-Tool-Setup.exe";
 const installerSignatureName = `${installerName}.sig`;
-const updatePackageBaseUrl =
-  "https://git.711ev.com/api/packages/711ev/generic/711ev-codex-tool";
+const githubReleaseBaseUrl =
+  "https://github.com/711EV/711EV-Codex-Tool/releases/download";
 const platform = process.platform;
 const versionFiles = [
   path.join(projectRoot, "package.json"),
@@ -134,7 +134,7 @@ async function copyWindowsInstallerArtifacts(version) {
     platforms: {
       [platformKey]: {
         signature,
-        url: `${updatePackageBaseUrl}/${version}/${installerName}`,
+        url: `${githubReleaseBaseUrl}/v${version}/${installerName}`,
       },
     },
   });
@@ -163,10 +163,8 @@ async function prepareOutputDirectories(system) {
     await rm(path.join(distRoot, entry.name), { recursive: true, force: true });
   }
 
-  const releaseScripts = new Set(["release-gitea.mjs"]);
   const releaseEntries = await readdir(releasesRoot, { withFileTypes: true });
   for (const entry of releaseEntries) {
-    if (releaseScripts.has(entry.name)) continue;
     await rm(path.join(releasesRoot, entry.name), { recursive: true, force: true });
   }
 }
