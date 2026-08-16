@@ -19,18 +19,6 @@ dist/
 └─ CodexLocalSync.data/                  # 首次运行后生成
 ```
 
-本地待发布产物统一保存在 `releases`：
-
-```text
-releases/
-├─ 711EV-Codex-Tool.exe                  # Windows 便携版附件
-├─ 711EV-Codex-Tool-Setup.exe            # Windows 安装/升级程序
-├─ 711EV-Codex-Tool-Setup.exe.sig        # 自动更新签名
-└─ latest.json                            # 在线更新清单
-```
-
-`releases` 整目录被 Git 忽略，仅用于本地构建输出。GitHub 正式版本由 `.github/workflows/release.yml` 自动构建和发布。
-
 首次运行时，程序会在可执行文件同级创建：
 
 ```text
@@ -48,7 +36,7 @@ npm install
 npm run build
 ```
 
-`npm run build` 是统一打包入口。该命令执行 TypeScript 检查、前端构建和 Tauri 桌面打包，自动增加补丁版本号，并分别生成 `dist` 预览程序和 `releases` 发布产物。打包时会清除旧产物，但始终保留 `dist/CodexLocalSync.data` 运行数据。
+`npm run build` 是本地打包入口。该命令执行 TypeScript 检查、前端构建和 Tauri 桌面打包，自动增加补丁版本号，并把预览程序放入 `dist`。Tauri 原始构建产物保存在 `src-tauri/target`，打包时始终保留 `dist/CodexLocalSync.data` 运行数据。
 
 Windows 升级包使用 Tauri 签名。默认私钥路径为：
 

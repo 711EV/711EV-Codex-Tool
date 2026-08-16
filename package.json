@@ -1,7 +1,7 @@
 {
   "name": "codex-local-sync",
   "private": true,
-  "version": "0.1.69",
+  "version": "0.1.70",
   "type": "module",
   "scripts": {
     "build": "node scripts/build.mjs",

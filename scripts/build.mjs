@@ -8,13 +8,8 @@ import process from "node:process";
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const targetRoot = path.join(projectRoot, "src-tauri", "target", "release");
 const distRoot = path.join(projectRoot, "dist");
-const releasesRoot = path.join(projectRoot, "releases");
 const portableDataDirName = "CodexLocalSync.data";
 const portableExecutableName = "711EV-Codex-Tool.exe";
-const installerName = "711EV-Codex-Tool-Setup.exe";
-const installerSignatureName = `${installerName}.sig`;
-const githubReleaseBaseUrl =
-  "https://github.com/711EV/711EV-Codex-Tool/releases/download";
 const platform = process.platform;
 const versionFiles = [
   path.join(projectRoot, "package.json"),
@@ -70,18 +65,11 @@ try {
       "--bundles",
       "nsis",
     ]);
-    await prepareOutputDirectories(system);
-    await Promise.all([
-      cp(
-        path.join(targetRoot, portableExecutableName),
-        path.join(distRoot, portableExecutableName),
-      ),
-      cp(
-        path.join(targetRoot, portableExecutableName),
-        path.join(releasesRoot, portableExecutableName),
-      ),
-    ]);
-    await copyWindowsInstallerArtifacts(buildVersion);
+    await prepareOutputDirectory(system);
+    await cp(
+      path.join(targetRoot, portableExecutableName),
+      path.join(distRoot, portableExecutableName),
+    );
   } else {
     await runNode([
       path.join("node_modules", "@tauri-apps", "cli", "tauri.js"),
@@ -89,7 +77,7 @@ try {
       "--bundles",
       "app",
     ]);
-    await prepareOutputDirectories(system);
+    await prepareOutputDirectory(system);
     const outputApp = path.join(distRoot, "711EV-Codex-Tool.app");
     await cp(path.join(targetRoot, "bundle", "macos", "711EV-Codex-Tool.app"), outputApp, {
       recursive: true,
@@ -99,7 +87,6 @@ try {
   console.log(`版本：v${buildVersion}`);
   console.log(`Vue 文件：${path.join(projectRoot, "build")}`);
   console.log(`预览程序：${distRoot}`);
-  console.log(`发布产物：${releasesRoot}`);
 } catch (error) {
   await Promise.all(
     [...originalVersionFiles].map(([filePath, contents]) => writeFile(filePath, contents, "utf8")),
@@ -107,65 +94,15 @@ try {
   throw error;
 }
 
-async function copyWindowsInstallerArtifacts(version) {
-  const bundleDir = path.join(targetRoot, "bundle", "nsis");
-  const files = await readdir(bundleDir);
-  const installerSource = singleFile(
-    files,
-    (name) => name.includes(`_${version}_`) && name.endsWith("-setup.exe"),
-    "NSIS 安装程序",
-  );
-  const signatureSource = `${installerSource}.sig`;
-  if (!files.includes(signatureSource)) {
-    throw new Error(`缺少升级包签名：${signatureSource}`);
-  }
-
-  await Promise.all([
-    cp(path.join(bundleDir, installerSource), path.join(releasesRoot, installerName)),
-    cp(path.join(bundleDir, signatureSource), path.join(releasesRoot, installerSignatureName)),
-  ]);
-
-  const signature = (await readFile(path.join(bundleDir, signatureSource), "utf8")).trim();
-  const platformKey = `windows-${process.arch === "arm64" ? "aarch64" : "x86_64"}`;
-  await writeJson(path.join(releasesRoot, "latest.json"), {
-    version,
-    notes: `711EV-Codex-Tool ${version}`,
-    pub_date: new Date().toISOString(),
-    platforms: {
-      [platformKey]: {
-        signature,
-        url: `${githubReleaseBaseUrl}/v${version}/${installerName}`,
-      },
-    },
-  });
-}
-
-function singleFile(files, predicate, label) {
-  const matches = files.filter(predicate);
-  if (matches.length !== 1) {
-    throw new Error(`${label}数量不正确：${matches.join(", ") || "未找到"}`);
-  }
-  return matches[0];
-}
-
-async function prepareOutputDirectories(system) {
+async function prepareOutputDirectory(system) {
   assertManagedDirectory(distRoot, "dist");
-  assertManagedDirectory(releasesRoot, "releases");
-  await Promise.all([
-    mkdir(distRoot, { recursive: true }),
-    mkdir(releasesRoot, { recursive: true }),
-  ]);
+  await mkdir(distRoot, { recursive: true });
   await migrateLegacyPortableData(distRoot, system);
 
   const entries = await readdir(distRoot, { withFileTypes: true });
   for (const entry of entries) {
     if (entry.name === portableDataDirName) continue;
     await rm(path.join(distRoot, entry.name), { recursive: true, force: true });
-  }
-
-  const releaseEntries = await readdir(releasesRoot, { withFileTypes: true });
-  for (const entry of releaseEntries) {
-    await rm(path.join(releasesRoot, entry.name), { recursive: true, force: true });
   }
 }
 
