@@ -8,6 +8,7 @@ import process from "node:process";
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const targetRoot = path.join(projectRoot, "src-tauri", "target", "release");
 const distRoot = path.join(projectRoot, "dist");
+const releasesRoot = path.join(projectRoot, "releases");
 const portableDataDirName = "CodexLocalSync.data";
 const portableExecutableName = "711EV-Codex-Tool.exe";
 const installerName = "711EV-Codex-Tool-Setup.exe";
@@ -69,11 +70,17 @@ try {
       "--bundles",
       "nsis",
     ]);
-    await prepareOutputDirectory(system);
-    await cp(
-      path.join(targetRoot, portableExecutableName),
-      path.join(distRoot, portableExecutableName),
-    );
+    await prepareOutputDirectories(system);
+    await Promise.all([
+      cp(
+        path.join(targetRoot, portableExecutableName),
+        path.join(distRoot, portableExecutableName),
+      ),
+      cp(
+        path.join(targetRoot, portableExecutableName),
+        path.join(releasesRoot, portableExecutableName),
+      ),
+    ]);
     await copyWindowsInstallerArtifacts(buildVersion);
   } else {
     await runNode([
@@ -82,7 +89,7 @@ try {
       "--bundles",
       "app",
     ]);
-    await prepareOutputDirectory(system);
+    await prepareOutputDirectories(system);
     const outputApp = path.join(distRoot, "711EV-Codex-Tool.app");
     await cp(path.join(targetRoot, "bundle", "macos", "711EV-Codex-Tool.app"), outputApp, {
       recursive: true,
@@ -91,7 +98,8 @@ try {
 
   console.log(`版本：v${buildVersion}`);
   console.log(`Vue 文件：${path.join(projectRoot, "build")}`);
-  console.log(`客户端文件：${distRoot}`);
+  console.log(`预览程序：${distRoot}`);
+  console.log(`发布产物：${releasesRoot}`);
 } catch (error) {
   await Promise.all(
     [...originalVersionFiles].map(([filePath, contents]) => writeFile(filePath, contents, "utf8")),
@@ -104,7 +112,7 @@ async function copyWindowsInstallerArtifacts(version) {
   const files = await readdir(bundleDir);
   const installerSource = singleFile(
     files,
-    (name) => name.endsWith("-setup.exe"),
+    (name) => name.includes(`_${version}_`) && name.endsWith("-setup.exe"),
     "NSIS 安装程序",
   );
   const signatureSource = `${installerSource}.sig`;
@@ -113,13 +121,13 @@ async function copyWindowsInstallerArtifacts(version) {
   }
 
   await Promise.all([
-    cp(path.join(bundleDir, installerSource), path.join(distRoot, installerName)),
-    cp(path.join(bundleDir, signatureSource), path.join(distRoot, installerSignatureName)),
+    cp(path.join(bundleDir, installerSource), path.join(releasesRoot, installerName)),
+    cp(path.join(bundleDir, signatureSource), path.join(releasesRoot, installerSignatureName)),
   ]);
 
   const signature = (await readFile(path.join(bundleDir, signatureSource), "utf8")).trim();
   const platformKey = `windows-${process.arch === "arm64" ? "aarch64" : "x86_64"}`;
-  await writeJson(path.join(distRoot, "latest.json"), {
+  await writeJson(path.join(releasesRoot, "latest.json"), {
     version,
     notes: `711EV-Codex-Tool ${version}`,
     pub_date: new Date().toISOString(),
@@ -140,22 +148,33 @@ function singleFile(files, predicate, label) {
   return matches[0];
 }
 
-async function prepareOutputDirectory(system) {
-  const resolvedDistRoot = path.resolve(distRoot);
-  if (
-    path.dirname(resolvedDistRoot) !== projectRoot ||
-    path.basename(resolvedDistRoot) !== "dist"
-  ) {
-    throw new Error(`拒绝清理非项目 dist 目录：${resolvedDistRoot}`);
-  }
+async function prepareOutputDirectories(system) {
+  assertManagedDirectory(distRoot, "dist");
+  assertManagedDirectory(releasesRoot, "releases");
+  await Promise.all([
+    mkdir(distRoot, { recursive: true }),
+    mkdir(releasesRoot, { recursive: true }),
+  ]);
+  await migrateLegacyPortableData(distRoot, system);
 
-  await mkdir(resolvedDistRoot, { recursive: true });
-  await migrateLegacyPortableData(resolvedDistRoot, system);
-
-  const entries = await readdir(resolvedDistRoot, { withFileTypes: true });
+  const entries = await readdir(distRoot, { withFileTypes: true });
   for (const entry of entries) {
     if (entry.name === portableDataDirName) continue;
-    await rm(path.join(resolvedDistRoot, entry.name), { recursive: true, force: true });
+    await rm(path.join(distRoot, entry.name), { recursive: true, force: true });
+  }
+
+  const releaseScripts = new Set(["release-gitea.mjs"]);
+  const releaseEntries = await readdir(releasesRoot, { withFileTypes: true });
+  for (const entry of releaseEntries) {
+    if (releaseScripts.has(entry.name)) continue;
+    await rm(path.join(releasesRoot, entry.name), { recursive: true, force: true });
+  }
+}
+
+function assertManagedDirectory(directory, expectedName) {
+  const resolved = path.resolve(directory);
+  if (path.dirname(resolved) !== projectRoot || path.basename(resolved) !== expectedName) {
+    throw new Error(`拒绝清理非项目 ${expectedName} 目录：${resolved}`);
   }
 }
 

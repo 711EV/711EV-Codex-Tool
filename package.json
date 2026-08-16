@@ -1,12 +1,11 @@
 {
   "name": "codex-local-sync",
   "private": true,
-  "version": "0.1.66",
+  "version": "0.1.68",
   "type": "module",
   "scripts": {
     "build": "node scripts/build.mjs",
-    "package": "node scripts/package.mjs",
-    "release:gitea": "node scripts/release-gitea.mjs",
+    "release:gitea": "node releases/release-gitea.mjs",
     "test": "vitest run"
   },
   "dependencies": {
