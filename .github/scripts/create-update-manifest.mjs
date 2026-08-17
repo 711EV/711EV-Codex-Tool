@@ -14,13 +14,13 @@ const packageJson = JSON.parse(await readFile(path.join(projectRoot, "package.js
 const version = packageJson.version;
 const tag = `v${version}`;
 const downloadBase = `https://github.com/${repository}/releases/download/${tag}`;
-const windowsInstaller = "711EV-Codex-Tool-Setup.exe";
-const macUpdater = "711EV-Codex-Tool-macOS-universal.app.tar.gz";
+const windowsInstaller = `711EV-Codex-Tool-${version}-Windows-安装包.exe`;
+const macUpdater = `711EV-Codex-Tool-${version}-macOS-自动更新包.app.tar.gz`;
 const windowsSignature = await signature(`${windowsInstaller}.sig`);
 const macSignature = await signature(`${macUpdater}.sig`);
 const macPlatform = {
   signature: macSignature,
-  url: `${downloadBase}/${macUpdater}`,
+  url: assetUrl(macUpdater),
 };
 
 const manifest = {
@@ -30,12 +30,16 @@ const manifest = {
   platforms: {
     "windows-x86_64": {
       signature: windowsSignature,
-      url: `${downloadBase}/${windowsInstaller}`,
+      url: assetUrl(windowsInstaller),
     },
     "darwin-x86_64": macPlatform,
     "darwin-aarch64": macPlatform,
   },
 };
+
+function assetUrl(name) {
+  return `${downloadBase}/${encodeURIComponent(name)}`;
+}
 
 await writeFile(
   path.join(assetsRoot, "latest.json"),

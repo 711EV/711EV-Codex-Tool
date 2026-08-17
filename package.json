@@ -2,7 +2,7 @@
   "name": "711ev-codex-tool",
   "author": "711EV",
   "private": true,
-  "version": "0.1.95",
+  "version": "0.1.96",
   "type": "module",
   "scripts": {
     "build": "node scripts/build.mjs",

@@ -43,9 +43,11 @@ jobs:
           $signature = "$($installer.FullName).sig"
           if (-not (Test-Path -LiteralPath $signature)) { throw "Updater signature is missing" }
           New-Item -ItemType Directory -Path release-assets -Force | Out-Null
-          Copy-Item "src-tauri/target/release/711EV-Codex-Tool.exe" "release-assets/711EV-Codex-Tool.exe"
-          Copy-Item $installer.FullName "release-assets/711EV-Codex-Tool-Setup.exe"
-          Copy-Item $signature "release-assets/711EV-Codex-Tool-Setup.exe.sig"
+          $portableName = "711EV-Codex-Tool-$version-Windows-便携版.exe"
+          $installerName = "711EV-Codex-Tool-$version-Windows-安装包.exe"
+          Copy-Item "src-tauri/target/release/711EV-Codex-Tool.exe" "release-assets/$portableName"
+          Copy-Item $installer.FullName "release-assets/$installerName"
+          Copy-Item $signature "release-assets/$installerName.sig"
       - uses: actions/upload-artifact@v4
         with:
           name: windows-release
@@ -86,9 +88,9 @@ jobs:
           test -n "$updater"
           test -f "$updater.sig"
           mkdir -p release-assets
-          cp "$dmg" "release-assets/711EV-Codex-Tool-macOS-universal.dmg"
-          cp "$updater" "release-assets/711EV-Codex-Tool-macOS-universal.app.tar.gz"
-          cp "$updater.sig" "release-assets/711EV-Codex-Tool-macOS-universal.app.tar.gz.sig"
+          cp "$dmg" "release-assets/711EV-Codex-Tool-${version}-macOS-通用安装包.dmg"
+          cp "$updater" "release-assets/711EV-Codex-Tool-${version}-macOS-自动更新包.app.tar.gz"
+          cp "$updater.sig" "release-assets/711EV-Codex-Tool-${version}-macOS-自动更新包.app.tar.gz.sig"
       - uses: actions/upload-artifact@v4
         with:
           name: macos-release
@@ -112,7 +114,12 @@ jobs:
         with:
           name: 711EV-Codex-Tool ${{ github.ref_name }}
           body: |
-            Windows: portable and installer packages
-            macOS: Intel / Apple Silicon universal disk image
+            本版本提供以下下载文件：
+
+            - Windows 便携版：无需安装，下载后可直接运行。
+            - Windows 安装包：支持选择安装目录并创建桌面快捷方式。
+            - macOS 通用安装包：同时支持 Intel 与 Apple Silicon 设备。
+
+            `.sig` 和 `latest.json` 为应用自动更新所需文件，普通用户无需手动下载。
           files: release-assets/*
           fail_on_unmatched_files: true
