@@ -1171,13 +1171,18 @@ fn upsert_provider_section(
 ) -> AppResult<String> {
     let mut document = parse_document(content)?;
     if document.get("model_providers").is_none() {
+        let mut providers = Table::new();
+        providers.set_implicit(true);
         document
             .as_table_mut()
-            .insert("model_providers", Item::Table(Table::new()));
+            .insert("model_providers", Item::Table(providers));
     }
     let providers = document["model_providers"]
         .as_table_mut()
         .ok_or_else(|| AppError::Message("config.toml 中 model_providers 不是有效配置表".into()))?;
+    if providers.iter().all(|(_, item)| item.is_table()) {
+        providers.set_implicit(true);
+    }
     if providers.get(provider_id).is_none() {
         providers.insert(provider_id, Item::Table(Table::new()));
     }
@@ -1433,6 +1438,38 @@ mod tests {
         assert!(result.contains("name = \"foo\""));
         assert!(result.contains("base_url = \"https://new\""));
         assert!(result.contains("[mcp]"));
+        assert!(!result.lines().any(|line| line == "[model_providers]"));
+    }
+
+    #[test]
+    fn removes_redundant_explicit_provider_parent_header() {
+        let content = "[model_providers]\n\n[model_providers.foo]\nbase_url = \"https://old\"\n";
+        let result = upsert_provider_section(
+            content,
+            "foo",
+            &test_provider_row("profile", "foo", "sk-test"),
+            false,
+        )
+        .unwrap();
+
+        assert!(!result.lines().any(|line| line == "[model_providers]"));
+        assert!(result.contains("[model_providers.foo]"));
+    }
+
+    #[test]
+    fn preserves_explicit_provider_parent_with_direct_fields() {
+        let content = "[model_providers]\nunknown = \"keep\"\n";
+        let result = upsert_provider_section(
+            content,
+            "foo",
+            &test_provider_row("profile", "foo", "sk-test"),
+            false,
+        )
+        .unwrap();
+
+        assert!(result.lines().any(|line| line == "[model_providers]"));
+        assert!(result.contains("unknown = \"keep\""));
+        assert!(result.contains("[model_providers.foo]"));
     }
 
     #[test]
