@@ -1,4 +1,5 @@
 node_modules/
+src/App.test.ts
 package-lock.json
 build/
 dist/

@@ -397,15 +397,41 @@ input:focus-visible {
 .top-menu-link svg {
   flex: 0 0 auto;
   color: var(--text-tertiary);
+  fill: none;
 }
 
 .top-menu-link:hover {
-  color: var(--text-primary);
-  background: rgba(255, 255, 255, 0.08);
-  border-color: var(--border);
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-color: rgba(238, 133, 188, 0.28);
 }
 
 .top-menu-link:hover svg {
+  color: var(--accent);
+}
+
+.top-menu-github-link {
+  min-width: 52px;
+  padding-right: 8px;
+  padding-left: 8px;
+}
+
+.top-menu-github-link svg {
+  fill: currentColor;
+}
+
+.top-menu-github-link.star-count-hidden {
+  min-width: 34px;
+}
+
+.github-star-count {
+  min-width: 12px;
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+  text-align: left;
+}
+
+.top-menu-github-link:hover .github-star-count {
   color: var(--accent);
 }
 

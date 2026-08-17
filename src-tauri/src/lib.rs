@@ -345,7 +345,9 @@ async fn restart_codex_client(
         let store = Store::open(&data_dir).map_err(String::from)?;
         let profile = store.get_profile(&profile_id).map_err(String::from)?;
         let home = profile.home_path();
-        let shutdown = process::ensure_stopped(&home, force_close_client).map_err(String::from)?;
+        let shutdown =
+            process::ensure_stopped(&home, profile.app_path.as_deref(), force_close_client)
+                .map_err(String::from)?;
         let app_path = profile
             .app_path
             .as_deref()

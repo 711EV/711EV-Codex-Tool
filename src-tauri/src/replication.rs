@@ -381,7 +381,7 @@ fn cleanup_sessions(
     })?;
 
     let home = profile.home_path();
-    let shutdown = process::ensure_stopped(&home, force_close_client)?;
+    let shutdown = process::ensure_stopped(&home, profile.app_path.as_deref(), force_close_client)?;
     let mut restart_guard = ClientRestartGuard {
         app_path: profile
             .app_path
@@ -883,7 +883,7 @@ fn sync_updates_inner(
     expected_target_provider: &str,
 ) -> AppResult<ReplicationResult> {
     let home = profile.home_path();
-    let shutdown = process::ensure_stopped(&home, force_close_client)?;
+    let shutdown = process::ensure_stopped(&home, profile.app_path.as_deref(), force_close_client)?;
     let mut restart_guard = ClientRestartGuard {
         app_path: profile
             .app_path
@@ -1085,7 +1085,7 @@ fn execute_inner(
     migrate_sources: bool,
 ) -> AppResult<ReplicationResult> {
     let home = profile.home_path();
-    let shutdown = process::ensure_stopped(&home, force_close_client)?;
+    let shutdown = process::ensure_stopped(&home, profile.app_path.as_deref(), force_close_client)?;
     let mut restart_guard = ClientRestartGuard {
         app_path: profile
             .app_path
@@ -1460,7 +1460,7 @@ pub fn cleanup_orphans(
     force_close_client: bool,
 ) -> AppResult<Vec<ReplicaMapping>> {
     let home = profile.home_path();
-    let shutdown = process::ensure_stopped(&home, force_close_client)?;
+    let shutdown = process::ensure_stopped(&home, profile.app_path.as_deref(), force_close_client)?;
     let mut restart_guard = ClientRestartGuard {
         app_path: profile
             .app_path

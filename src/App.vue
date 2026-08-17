@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
+import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import {
   AlertTriangle,
   ArrowRightLeft,
@@ -88,9 +88,10 @@ const restartPrompt = ref<{
   summary: string;
 } | null>(null);
 const pendingForceOperation = ref<
-  "replication" | "migration" | "client-restart" | "update-sync" | "archive-cleanup" | "child-cleanup" | null
+  "replication" | "migration" | "client-restart" | "provider-switch-restart" | "update-sync" | "archive-cleanup" | "child-cleanup" | null
 >(null);
 const notice = ref<string | null>(null);
+let noticeDismissTimer: number | undefined;
 const expandedSessionGroups = ref<string[]>([]);
 const canPreview = computed(
   () =>
@@ -153,11 +154,62 @@ const sessionGroups = computed(() => {
 });
 
 onMounted(async () => {
+  window.addEventListener("keydown", handleModalKeydown);
   await workspace.initialize();
   if (import.meta.env.PROD) {
     void checkApplicationUpdate(true);
   }
 });
+
+onUnmounted(() => {
+  window.removeEventListener("keydown", handleModalKeydown);
+  if (noticeDismissTimer !== undefined) window.clearTimeout(noticeDismissTimer);
+});
+
+watch(notice, (message) => {
+  if (noticeDismissTimer !== undefined) {
+    window.clearTimeout(noticeDismissTimer);
+    noticeDismissTimer = undefined;
+  }
+  if (!message) return;
+
+  noticeDismissTimer = window.setTimeout(() => {
+    notice.value = null;
+    noticeDismissTimer = undefined;
+  }, 5_000);
+});
+
+function handleModalKeydown(event: KeyboardEvent) {
+  if (event.key !== "Escape") return;
+
+  if (forceClosePrompt.value) {
+    closeForcePrompt();
+  } else if (applicationUpdate.value && updateDialogOpen.value) {
+    void closeApplicationUpdate();
+  } else if (providerSwitchResult.value) {
+    dismissProviderSwitchRestart();
+  } else if (providerSwitchDialog.value) {
+    closeProviderSwitchDialog();
+  } else if (providerConfigDialog.value) {
+    closeProviderConfigDialog();
+  } else if (restartPrompt.value) {
+    dismissRestartPrompt();
+  } else if (archiveCleanupPreview.value) {
+    closeArchiveCleanupPreview();
+  } else if (childCleanupPreview.value) {
+    closeChildCleanupPreview();
+  } else if (updateSyncPreview.value) {
+    closeUpdateSyncPreview();
+  } else if (migrationPreview.value) {
+    closeMigrationPreview();
+  } else if (preview.value) {
+    preview.value = null;
+  } else {
+    return;
+  }
+
+  event.preventDefault();
+}
 
 function resolveRootSession(
   session: ProviderSessionRecord,
@@ -498,7 +550,9 @@ async function runChildCleanup(force = false) {
 }
 
 async function retryForcedOperation() {
-  if (pendingForceOperation.value === "client-restart") {
+  if (pendingForceOperation.value === "provider-switch-restart") {
+    await restartAfterProviderSwitch(true);
+  } else if (pendingForceOperation.value === "client-restart") {
     await restartCodexDesktop(true);
   } else if (pendingForceOperation.value === "child-cleanup") {
     await runChildCleanup(true);
@@ -663,15 +717,23 @@ function dismissProviderSwitchRestart() {
   if (!providerSwitchRestarting.value) providerSwitchResult.value = null;
 }
 
-async function restartAfterProviderSwitch() {
+async function restartAfterProviderSwitch(force = false) {
   if (!providerSwitchResult.value) return;
   providerSwitchRestarting.value = true;
   try {
-    await workspace.restartCodexClient(false);
+    await workspace.restartCodexClient(force);
     providerSwitchResult.value = null;
+    forceClosePrompt.value = false;
+    pendingForceOperation.value = null;
     notice.value = "Codex Desktop 已重启，并会读取刚刚写入的供应商配置";
   } catch (reason) {
-    notice.value = reason instanceof Error ? reason.message : String(reason);
+    const message = reason instanceof Error ? reason.message : String(reason);
+    if (!force && message.includes("confirm force close and retry")) {
+      pendingForceOperation.value = "provider-switch-restart";
+      forceClosePrompt.value = true;
+      return;
+    }
+    notice.value = message;
   } finally {
     providerSwitchRestarting.value = false;
   }
@@ -1211,7 +1273,7 @@ async function installApplicationUpdate() {
       </main>
     </div>
 
-    <div v-if="preview" class="modal-backdrop" @mousedown.self="preview = null">
+    <div v-if="preview" class="modal-backdrop">
       <section class="modal preview-modal">
         <div class="modal-heading">
           <div><p class="eyebrow">执行前检查</p><h2>会话副本预览</h2></div>
@@ -1253,7 +1315,6 @@ async function installApplicationUpdate() {
     <div
       v-if="migrationPreview"
       class="modal-backdrop"
-      @mousedown.self="closeMigrationPreview"
     >
       <section class="modal preview-modal migration-modal">
         <div class="modal-heading">
@@ -1323,7 +1384,6 @@ async function installApplicationUpdate() {
     <div
       v-if="updateSyncPreview"
       class="modal-backdrop"
-      @mousedown.self="closeUpdateSyncPreview"
     >
       <section class="modal preview-modal update-sync-modal">
         <div class="modal-heading">
@@ -1437,7 +1497,6 @@ async function installApplicationUpdate() {
     <div
       v-if="childCleanupPreview"
       class="modal-backdrop"
-      @mousedown.self="closeChildCleanupPreview"
     >
       <section class="modal preview-modal child-cleanup-modal">
         <div class="modal-heading">
@@ -1555,7 +1614,6 @@ async function installApplicationUpdate() {
     <div
       v-if="archiveCleanupPreview"
       class="modal-backdrop"
-      @mousedown.self="closeArchiveCleanupPreview"
     >
       <section class="modal preview-modal archive-cleanup-modal">
         <div class="modal-heading">
@@ -1666,7 +1724,7 @@ async function installApplicationUpdate() {
       </section>
     </div>
 
-    <div v-if="providerConfigDialog" class="modal-backdrop" @mousedown.self="closeProviderConfigDialog">
+    <div v-if="providerConfigDialog" class="modal-backdrop">
       <section class="modal provider-config-modal">
         <div class="modal-heading">
           <div><p class="eyebrow">供应商配置</p><h2>{{ providerConfigDialog === 'add' ? '添加供应商' : '编辑供应商' }}</h2></div>
@@ -1727,7 +1785,7 @@ async function installApplicationUpdate() {
       </section>
     </div>
 
-    <div v-if="providerSwitchDialog" class="modal-backdrop high-priority" @mousedown.self="closeProviderSwitchDialog">
+    <div v-if="providerSwitchDialog" class="modal-backdrop high-priority">
       <section class="modal provider-switch-modal">
         <div class="modal-heading">
           <div><p class="eyebrow">切换供应商</p><h2>切换到 {{ providerSwitchDialog }}</h2></div>
@@ -1750,13 +1808,13 @@ async function installApplicationUpdate() {
           <button class="secondary-button" @click="closeProviderSwitchDialog">取消</button>
           <button class="primary-button" :disabled="workspace.providerConfigSwitching" @click="confirmProviderSwitch">
             <LoaderCircle v-if="workspace.providerConfigSwitching" :size="16" class="spinning" />
-            <RefreshCw v-else :size="16" />确认切换
+            <ArrowRightLeft v-else :size="16" />确认切换
           </button>
         </div>
       </section>
     </div>
 
-    <div v-if="providerSwitchResult" class="modal-backdrop high-priority" @mousedown.self="dismissProviderSwitchRestart">
+    <div v-if="providerSwitchResult" class="modal-backdrop high-priority">
       <section class="modal restart-client-modal">
         <div class="modal-heading">
           <div><p class="eyebrow">供应商切换完成</p><h2>是否重启 Codex Desktop？</h2></div>
@@ -1766,7 +1824,7 @@ async function installApplicationUpdate() {
         <div class="restart-client-warning"><AlertTriangle :size="17" /><span>工具不会判断当前是否有运行任务，请根据实际情况决定是否现在重启。</span></div>
         <div class="modal-actions">
           <button class="secondary-button" :disabled="providerSwitchRestarting" @click="dismissProviderSwitchRestart">暂不重启</button>
-          <button class="primary-button" :disabled="providerSwitchRestarting" @click="restartAfterProviderSwitch">
+          <button class="primary-button" :disabled="providerSwitchRestarting" @click="restartAfterProviderSwitch(false)">
             <LoaderCircle v-if="providerSwitchRestarting" :size="16" class="spinning" /><RefreshCw v-else :size="16" />重启 Desktop
           </button>
         </div>
@@ -1794,7 +1852,6 @@ async function installApplicationUpdate() {
     <div
       v-if="restartPrompt"
       class="modal-backdrop"
-      @mousedown.self="dismissRestartPrompt"
     >
       <section class="modal restart-client-modal">
         <div class="modal-heading">
@@ -1836,7 +1893,6 @@ async function installApplicationUpdate() {
     <div
       v-if="applicationUpdate && updateDialogOpen"
       class="modal-backdrop high-priority"
-      @mousedown.self="closeApplicationUpdate"
     >
       <section class="modal application-update-modal">
         <div class="modal-heading">

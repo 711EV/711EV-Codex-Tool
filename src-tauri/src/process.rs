@@ -19,8 +19,9 @@ struct MatchingProcess {
     executable: Option<String>,
 }
 
-fn matching_processes(codex_home: &Path) -> Vec<MatchingProcess> {
+fn matching_processes(codex_home: &Path, app_path: Option<&str>) -> Vec<MatchingProcess> {
     let target = normalize(codex_home);
+    let target_executable = app_path.map(normalize_text);
     let default_home = dirs::home_dir()
         .map(|path| path.join(".codex"))
         .is_some_and(|path| normalize(&path) == target);
@@ -38,10 +39,6 @@ fn matching_processes(codex_home: &Path) -> Vec<MatchingProcess> {
             let name = process.name().to_string_lossy().to_ascii_lowercase();
             let process_stem = name.strip_suffix(".exe").unwrap_or(&name);
             let executable = process.exe().map(|path| path.to_string_lossy().to_string());
-            let is_desktop_client = is_desktop_client_process(process_stem, executable.as_deref());
-            if !is_desktop_client {
-                return None;
-            }
             let command = process
                 .cmd()
                 .iter()
@@ -54,18 +51,55 @@ fn matching_processes(codex_home: &Path) -> Vec<MatchingProcess> {
                 .map(|part| part.to_string_lossy())
                 .collect::<Vec<_>>()
                 .join("\n");
-            let haystack = normalize_text(&format!("{command}\n{environment}"));
-            let exposes_other_home = environment
-                .split('\n')
-                .any(|value| value.to_ascii_lowercase().starts_with("codex_home="));
-            (haystack.contains(&target) || (default_home && !exposes_other_home)).then(|| {
-                MatchingProcess {
-                    pid: pid.as_u32(),
-                    executable,
-                }
+            matches_target_client(
+                &target,
+                default_home,
+                target_executable.as_deref(),
+                process_stem,
+                executable.as_deref(),
+                &command,
+                &environment,
+            )
+            .then(|| MatchingProcess {
+                pid: pid.as_u32(),
+                executable,
             })
         })
         .collect()
+}
+
+fn matches_target_client(
+    target_home: &str,
+    default_home: bool,
+    target_executable: Option<&str>,
+    process_stem: &str,
+    executable: Option<&str>,
+    command: &str,
+    environment: &str,
+) -> bool {
+    if !is_desktop_client_process(process_stem, executable) {
+        return false;
+    }
+    if target_executable
+        .zip(executable)
+        .is_some_and(|(target, actual)| executable_paths_match(target, actual))
+    {
+        return true;
+    }
+
+    let haystack = normalize_text(&format!("{command}\n{environment}"));
+    let exposes_other_home = environment
+        .split('\n')
+        .any(|value| value.to_ascii_lowercase().starts_with("codex_home="));
+    haystack.contains(target_home) || (default_home && !exposes_other_home)
+}
+
+fn executable_paths_match(expected: &str, actual: &str) -> bool {
+    let expected = normalize_text(expected);
+    let actual = normalize_text(actual);
+    actual == expected
+        || (expected.ends_with(".app")
+            && actual.starts_with(&format!("{}\\contents\\macos\\", expected)))
 }
 
 fn is_desktop_client_process(process_stem: &str, executable: Option<&str>) -> bool {
@@ -109,7 +143,39 @@ pub fn restart(app_path: Option<&str>, codex_home: &Path) -> AppResult<bool> {
     let mut command = std::process::Command::new(path);
 
     command.env("CODEX_HOME", codex_home).spawn()?;
+    #[cfg(target_os = "windows")]
+    if !wait_for_client_start(path, Duration::from_secs(10)) {
+        return Err(AppError::Message(
+            "已发送 Codex Desktop 启动命令，但未检测到客户端进程".into(),
+        ));
+    }
     Ok(true)
+}
+
+#[cfg(target_os = "windows")]
+fn wait_for_client_start(app_path: &Path, timeout: Duration) -> bool {
+    let expected = app_path.to_string_lossy();
+    let started = Instant::now();
+    while started.elapsed() < timeout {
+        let mut system = System::new_with_specifics(
+            RefreshKind::nothing().with_processes(ProcessRefreshKind::everything()),
+        );
+        system.refresh_processes(ProcessesToUpdate::All, true);
+        if system.processes().values().any(|process| {
+            let name = process.name().to_string_lossy().to_ascii_lowercase();
+            let process_stem = name.strip_suffix(".exe").unwrap_or(&name);
+            is_desktop_client_process(
+                process_stem,
+                process.exe().map(|path| path.to_string_lossy()).as_deref(),
+            ) && process
+                .exe()
+                .is_some_and(|path| executable_paths_match(&expected, &path.to_string_lossy()))
+        }) {
+            return true;
+        }
+        thread::sleep(Duration::from_millis(200));
+    }
+    false
 }
 
 #[cfg(target_os = "windows")]
@@ -124,8 +190,12 @@ fn is_official_windows_package_path(path: &Path) -> bool {
     has_windows_apps && has_official_package
 }
 
-pub fn ensure_stopped(codex_home: &Path, force: bool) -> AppResult<ShutdownOutcome> {
-    let processes = matching_processes(codex_home);
+pub fn ensure_stopped(
+    codex_home: &Path,
+    app_path: Option<&str>,
+    force: bool,
+) -> AppResult<ShutdownOutcome> {
+    let processes = matching_processes(codex_home, app_path);
     let pids = processes
         .iter()
         .map(|process| process.pid)
@@ -252,7 +322,11 @@ fn normalize(path: &Path) -> String {
 }
 
 fn normalize_text(value: &str) -> String {
-    value.replace('/', "\\").to_ascii_lowercase()
+    value
+        .replace('/', "\\")
+        .to_ascii_lowercase()
+        .replace(r"\\?\unc\", r"\\")
+        .replace(r"\\?\", "")
 }
 
 #[cfg(test)]
@@ -278,6 +352,28 @@ mod tests {
             "codex",
             Some("/Applications/Codex.app/Contents/MacOS/Codex")
         ));
+    }
+
+    #[test]
+    fn matches_saved_desktop_path_when_process_does_not_expose_codex_home() {
+        let app_path = r"C:\Program Files\WindowsApps\OpenAI.Codex\app\ChatGPT.exe";
+        assert!(matches_target_client(
+            r"f:\codex",
+            false,
+            Some(app_path),
+            "chatgpt",
+            Some(app_path),
+            "ChatGPT.exe",
+            "",
+        ));
+    }
+
+    #[test]
+    fn normalizes_windows_extended_path_prefixes() {
+        assert_eq!(
+            normalize_text(r"CODEX_HOME=\\?\F:\Codex"),
+            normalize_text(r"CODEX_HOME=F:\Codex"),
+        );
     }
 
     #[cfg(target_os = "windows")]

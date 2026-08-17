@@ -1,6 +1,6 @@
 [package]
 name = "codex-local-sync"
-version = "0.1.85"
+version = "0.1.92"
 description = "Portable local Codex session synchronization"
 authors = ["Codex Local Sync contributors"]
 edition = "2021"
