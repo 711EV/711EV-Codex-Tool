@@ -51,6 +51,7 @@ const notes = `本版本提供以下下载文件：
 \`.sig\` 和 \`latest.json\` 为应用自动更新所需文件，普通用户无需手动下载。`;
 const releaseExists = runGh(["release", "view", tag, "--repo", repository], true).ok;
 if (releaseExists) {
+  runGh(["release", "upload", tag, "--repo", repository, "--clobber", ...assetPaths]);
   runGh([
     "release",
     "edit",
@@ -61,8 +62,8 @@ if (releaseExists) {
     `711EV-Codex-Tool ${tag}`,
     "--notes",
     notes,
+    "--draft=false",
   ]);
-  runGh(["release", "upload", tag, "--repo", repository, "--clobber", ...assetPaths]);
 } else {
   runGh([
     "release",

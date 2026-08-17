@@ -9,17 +9,40 @@ permissions:
   contents: write
 
 jobs:
+  prepare-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Prepare draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ! gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$GITHUB_REF_NAME" \
+              --repo "$GITHUB_REPOSITORY" \
+              --verify-tag \
+              --draft \
+              --title "711EV-Codex-Tool $GITHUB_REF_NAME" \
+              --notes "正在生成跨平台安装包。"
+          fi
+
   build-windows:
+    needs: prepare-release
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 24
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: src-tauri
+      - name: Checkout source
+        shell: pwsh
+        run: |
+          git init .
+          git remote add origin "https://github.com/$env:GITHUB_REPOSITORY.git"
+          git fetch --no-tags --depth=1 origin $env:GITHUB_SHA
+          git checkout --detach FETCH_HEAD
+      - name: Prepare toolchains
+        shell: pwsh
+        run: |
+          node --version
+          npm --version
+          rustup toolchain install stable --profile minimal
+          rustup default stable
       - run: npm install --no-package-lock
       - run: npm exec vue-tsc -- --noEmit
       - run: npm exec vite -- build
@@ -48,25 +71,37 @@ jobs:
           Copy-Item "src-tauri/target/release/711EV-Codex-Tool.exe" "release-assets/$portableName"
           Copy-Item $installer.FullName "release-assets/$installerName"
           Copy-Item $signature "release-assets/$installerName.sig"
-      - uses: actions/upload-artifact@v7
-        with:
-          name: windows-release
-          path: release-assets/*
-          if-no-files-found: error
+      - name: Upload Windows assets
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $assets = Get-ChildItem release-assets -File | Select-Object -ExpandProperty FullName
+          if (@($assets).Count -ne 3) { throw "Expected three Windows release assets" }
+          gh release upload $env:GITHUB_REF_NAME --repo $env:GITHUB_REPOSITORY --clobber @assets
+          if ($LASTEXITCODE -ne 0) { throw "Failed to upload Windows release assets" }
 
   build-macos:
+    needs: prepare-release
     runs-on: macos-14
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 24
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-apple-darwin,x86_64-apple-darwin
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: src-tauri
+      - name: Checkout source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git init .
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          git fetch --no-tags --depth=1 origin "$GITHUB_SHA"
+          git checkout --detach FETCH_HEAD
+      - name: Prepare toolchains
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --version
+          npm --version
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustup target add aarch64-apple-darwin x86_64-apple-darwin
       - run: npm install --no-package-lock
       - run: npm exec vue-tsc -- --noEmit
       - run: npm exec vite -- build
@@ -91,22 +126,39 @@ jobs:
           cp "$dmg" "release-assets/711EV-Codex-Tool-${version}-macOS-universal.dmg"
           cp "$updater" "release-assets/711EV-Codex-Tool-${version}-macOS-updater.app.tar.gz"
           cp "$updater.sig" "release-assets/711EV-Codex-Tool-${version}-macOS-updater.app.tar.gz.sig"
-      - uses: actions/upload-artifact@v7
-        with:
-          name: macos-release
-          path: release-assets/*
-          if-no-files-found: error
+      - name: Upload macOS assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "$(find release-assets -maxdepth 1 -type f | wc -l | tr -d ' ')" = "3"
+          gh release upload "$GITHUB_REF_NAME" \
+            --repo "$GITHUB_REPOSITORY" \
+            --clobber \
+            release-assets/*
 
   publish:
     needs: [build-windows, build-macos]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/download-artifact@v8
-        with:
-          pattern: "*-release"
-          path: release-assets
-          merge-multiple: true
+      - name: Checkout source
+        run: |
+          set -euo pipefail
+          git init .
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          git fetch --no-tags --depth=1 origin "$GITHUB_SHA"
+          git checkout --detach FETCH_HEAD
+      - name: Download release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p release-assets
+          gh release download "$GITHUB_REF_NAME" \
+            --repo "$GITHUB_REPOSITORY" \
+            --dir release-assets \
+            --pattern '*'
       - name: Create cross-platform update manifest
         run: node .github/scripts/create-update-manifest.mjs release-assets "$GITHUB_REPOSITORY"
       - name: Publish GitHub Release
