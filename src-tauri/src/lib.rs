@@ -61,7 +61,7 @@ fn discover_profiles(context: tauri::State<'_, AppContext>) -> Result<DiscoveryR
         .map_err(String::from)?;
     let report = {
         let store = lock_store(&context)?;
-        discover_and_register(&store)?
+        discover_and_register(&context.data_dir, &store)?
     };
     provider_config::poll_official_snapshots(&context.data_dir).map_err(String::from)?;
     Ok(report)
@@ -414,7 +414,10 @@ fn replication_cleanup_orphans(
     replication::cleanup_orphans(&store, &profile, force_close_client).map_err(String::from)
 }
 
-fn discover_and_register(store: &Store) -> Result<DiscoveryReport, String> {
+fn discover_and_register(
+    data_dir: &std::path::Path,
+    store: &Store,
+) -> Result<DiscoveryReport, String> {
     let current = store.list_profiles().map_err(String::from)?;
     let scan = discovery::discover(&current);
     let discovered_count = scan.instances.len();
@@ -452,12 +455,24 @@ fn discover_and_register(store: &Store) -> Result<DiscoveryReport, String> {
             if refreshed.app_path.is_none() {
                 refreshed.app_path = existing.app_path.clone();
             }
+            provider_config::ensure_required_main_config(
+                data_dir,
+                &refreshed.id,
+                &refreshed.home_path(),
+            )
+            .map_err(String::from)?;
             store
                 .refresh_discovered_profile(&refreshed)
                 .map_err(String::from)?;
             refreshed_count += 1;
         } else {
             let profile = profiles::from_discovery(instance);
+            provider_config::ensure_required_main_config(
+                data_dir,
+                &profile.id,
+                &profile.home_path(),
+            )
+            .map_err(String::from)?;
             store.insert_profile(&profile).map_err(String::from)?;
             by_path.insert(key, profile);
             added_count += 1;
@@ -480,7 +495,7 @@ pub fn run() {
     if let Err(error) = provider_config::recover_transactions(&data_dir, &store) {
         eprintln!("failed to recover provider switch transaction: {error}");
     }
-    if let Err(error) = discover_and_register(&store) {
+    if let Err(error) = discover_and_register(&data_dir, &store) {
         eprintln!("failed to discover local profiles: {error}");
     }
     if let Err(error) = provider_config::poll_official_snapshots(&data_dir) {

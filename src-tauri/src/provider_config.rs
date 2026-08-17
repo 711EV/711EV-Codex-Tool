@@ -30,6 +30,8 @@ const OFFICIAL_ID: &str = "openai";
 const SEVEN_ELEVEN_ID: &str = "711EV";
 const SEVEN_ELEVEN_URL: &str = "https://ai.711ev.com/v1";
 const RESPONSES_WIRE_API: &str = "responses";
+const FILE_AUTH_STORE: &str = "file";
+const DEFAULT_SERVICE_TIER: &str = "fast";
 const AUTH_EVENT_DEBOUNCE: Duration = Duration::from_millis(500);
 const WATCH_PROFILE_REFRESH: Duration = Duration::from_secs(30);
 const SNAPSHOT_FALLBACK_SCAN: Duration = Duration::from_secs(60);
@@ -40,6 +42,92 @@ pub fn templates() -> Vec<ProviderConfigTemplate> {
         fixed_provider_id: SEVEN_ELEVEN_ID.into(),
         fixed_base_url: SEVEN_ELEVEN_URL.into(),
     }]
+}
+
+/// Normalizes the main config.toml fields required by this tool.
+///
+/// Only the primary config file is touched. The file-backed credential store
+/// is mandatory because provider switching and OAuth snapshots operate on
+/// auth.json. The other defaults are added only when the user has not already
+/// configured them.
+pub fn ensure_required_main_config(
+    data_dir: &Path,
+    profile_id: &str,
+    home: &Path,
+) -> AppResult<bool> {
+    let _lock = acquire_home_lock(data_dir, profile_id)?;
+    ensure_required_main_config_locked(home)
+}
+
+fn ensure_required_main_config_locked(home: &Path) -> AppResult<bool> {
+    let config_path = home.join("config.toml");
+    let existed = config_path.is_file();
+    let original = read_optional(&config_path)?;
+    let content = std::str::from_utf8(&original)
+        .map_err(|error| AppError::Message(format!("config.toml 不是有效 UTF-8: {error}")))?;
+    let mut document = parse_document(content)?;
+    let mut changed = false;
+
+    if document
+        .get("cli_auth_credentials_store")
+        .and_then(Item::as_str)
+        != Some(FILE_AUTH_STORE)
+    {
+        set_string_value(
+            document.as_table_mut(),
+            "cli_auth_credentials_store",
+            FILE_AUTH_STORE,
+        );
+        changed = true;
+    }
+    if document.get("disable_response_storage").is_none() {
+        set_bool_value(document.as_table_mut(), "disable_response_storage", true);
+        changed = true;
+    }
+    if document.get("service_tier").is_none() {
+        set_string_value(
+            document.as_table_mut(),
+            "service_tier",
+            DEFAULT_SERVICE_TIER,
+        );
+        changed = true;
+    }
+    if !changed {
+        return Ok(false);
+    }
+
+    let candidate = document.to_string();
+    if let Err(error) = write_atomic(&config_path, candidate.as_bytes())
+        .and_then(|_| validate_required_main_config(&config_path))
+    {
+        if existed {
+            let _ = write_atomic(&config_path, &original);
+        } else {
+            let _ = fs::remove_file(&config_path);
+            let _ = sync_parent(&config_path);
+        }
+        return Err(error);
+    }
+    Ok(true)
+}
+
+fn validate_required_main_config(config_path: &Path) -> AppResult<()> {
+    let content = fs::read_to_string(config_path)?;
+    let parsed = content
+        .parse::<toml::Value>()
+        .map_err(|error| AppError::Message(format!("config.toml 写入后解析失败: {error}")))?;
+    let valid = parsed
+        .get("cli_auth_credentials_store")
+        .and_then(toml::Value::as_str)
+        == Some(FILE_AUTH_STORE)
+        && parsed.get("disable_response_storage").is_some()
+        && parsed.get("service_tier").is_some();
+    if !valid {
+        return Err(AppError::Message(
+            "config.toml 必要字段写入后校验失败".into(),
+        ));
+    }
+    Ok(())
 }
 
 pub fn read(
@@ -190,7 +278,7 @@ pub fn switch(
     let profile = store.get_profile(profile_id)?;
     let home = profile.home_path();
     let _lock = acquire_home_lock(data_dir, &profile.id)?;
-    validate_auth_store(&home)?;
+    ensure_required_main_config_locked(&home)?;
 
     // Capture an OAuth login immediately before replacing auth.json. This
     // handles a token refresh that happened after the last polling pass.
@@ -535,12 +623,10 @@ fn finish_transaction(store: &Store, transaction: &ProviderSwitchTransactionRow)
 pub fn poll_official_snapshots(data_dir: &Path) -> AppResult<()> {
     let store = Store::open(data_dir)?;
     for profile in store.list_profiles()? {
-        if validate_auth_store(&profile.home_path()).is_err() {
-            continue;
-        }
         let Ok(_lock) = acquire_home_lock(data_dir, &profile.id) else {
             continue;
         };
+        ensure_required_main_config_locked(&profile.home_path())?;
         capture_official_snapshot_locked(data_dir, &store, &profile)?;
     }
     Ok(())
@@ -624,7 +710,6 @@ fn refresh_watched_homes(
     let next_profiles = store
         .list_profiles()?
         .into_iter()
-        .filter(|profile| validate_auth_store(&profile.home_path()).is_ok())
         .map(|profile| (normalized_path(&profile.home_path()), profile))
         .collect::<HashMap<_, _>>();
     let next_homes = next_profiles.keys().cloned().collect::<HashSet<_>>();
@@ -990,24 +1075,6 @@ fn normalize_url(value: &str) -> AppResult<String> {
         value.pop();
     }
     Ok(value)
-}
-
-fn validate_auth_store(home: &Path) -> AppResult<()> {
-    let path = home.join("config.toml");
-    let content = read_optional(&path)?;
-    let parsed = String::from_utf8_lossy(&content)
-        .parse::<toml::Value>()
-        .map_err(|error| AppError::Message(format!("config.toml 解析失败: {error}")))?;
-    let store = parsed
-        .get("cli_auth_credentials_store")
-        .and_then(toml::Value::as_str)
-        .unwrap_or("unknown");
-    if store != "file" {
-        return Err(AppError::Message(
-            "不支持当前认证存储方式，仅支持 cli_auth_credentials_store = \"file\"".into(),
-        ));
-    }
-    Ok(())
 }
 
 fn is_oauth_auth(bytes: &[u8]) -> bool {
@@ -1403,6 +1470,104 @@ mod tests {
     }
 
     #[test]
+    fn adds_missing_required_fields_to_primary_config() {
+        let temp = tempfile::tempdir().unwrap();
+        let data_dir = temp.path().join("data");
+        let home = temp.path().join("home");
+        fs::create_dir_all(&home).unwrap();
+        fs::write(
+            home.join("config.toml"),
+            "# keep this comment\nmodel_provider = \"openai\"\n\n[mcp_servers.demo]\ncommand = \"demo\"\n",
+        )
+        .unwrap();
+
+        assert!(ensure_required_main_config(&data_dir, "profile", &home).unwrap());
+
+        let content = fs::read_to_string(home.join("config.toml")).unwrap();
+        let parsed = content.parse::<toml::Value>().unwrap();
+        assert_eq!(
+            parsed["cli_auth_credentials_store"].as_str(),
+            Some(FILE_AUTH_STORE)
+        );
+        assert_eq!(parsed["disable_response_storage"].as_bool(), Some(true));
+        assert_eq!(parsed["service_tier"].as_str(), Some(DEFAULT_SERVICE_TIER));
+        assert_eq!(
+            parsed["mcp_servers"]["demo"]["command"].as_str(),
+            Some("demo")
+        );
+        assert!(content.contains("# keep this comment"));
+    }
+
+    #[test]
+    fn forces_file_auth_store_but_preserves_other_explicit_values() {
+        let temp = tempfile::tempdir().unwrap();
+        let data_dir = temp.path().join("data");
+        let home = temp.path().join("home");
+        fs::create_dir_all(&home).unwrap();
+        fs::write(
+            home.join("config.toml"),
+            "cli_auth_credentials_store = \"keyring\"\ndisable_response_storage = false\nservice_tier = \"flex\"\n\n[custom]\ncli_auth_credentials_store = \"keyring\"\ndisable_response_storage = false\nservice_tier = \"nested\"\n",
+        )
+        .unwrap();
+
+        assert!(ensure_required_main_config(&data_dir, "profile", &home).unwrap());
+
+        let first = fs::read(home.join("config.toml")).unwrap();
+        let parsed = std::str::from_utf8(&first)
+            .unwrap()
+            .parse::<toml::Value>()
+            .unwrap();
+        assert_eq!(
+            parsed["cli_auth_credentials_store"].as_str(),
+            Some(FILE_AUTH_STORE)
+        );
+        assert_eq!(parsed["disable_response_storage"].as_bool(), Some(false));
+        assert_eq!(parsed["service_tier"].as_str(), Some("flex"));
+        assert_eq!(
+            parsed["custom"]["cli_auth_credentials_store"].as_str(),
+            Some("keyring")
+        );
+        assert_eq!(
+            parsed["custom"]["disable_response_storage"].as_bool(),
+            Some(false)
+        );
+        assert_eq!(parsed["custom"]["service_tier"].as_str(), Some("nested"));
+
+        assert!(!ensure_required_main_config(&data_dir, "profile", &home).unwrap());
+        assert_eq!(fs::read(home.join("config.toml")).unwrap(), first);
+    }
+
+    #[test]
+    fn nested_fields_do_not_count_as_primary_config_defaults() {
+        let temp = tempfile::tempdir().unwrap();
+        let data_dir = temp.path().join("data");
+        let home = temp.path().join("home");
+        fs::create_dir_all(&home).unwrap();
+        fs::write(
+            home.join("config.toml"),
+            "[profile_settings]\ncli_auth_credentials_store = \"keyring\"\ndisable_response_storage = false\nservice_tier = \"flex\"\n",
+        )
+        .unwrap();
+
+        ensure_required_main_config(&data_dir, "profile", &home).unwrap();
+
+        let parsed = fs::read_to_string(home.join("config.toml"))
+            .unwrap()
+            .parse::<toml::Value>()
+            .unwrap();
+        assert_eq!(
+            parsed["cli_auth_credentials_store"].as_str(),
+            Some(FILE_AUTH_STORE)
+        );
+        assert_eq!(parsed["disable_response_storage"].as_bool(), Some(true));
+        assert_eq!(parsed["service_tier"].as_str(), Some(DEFAULT_SERVICE_TIER));
+        assert_eq!(
+            parsed["profile_settings"]["cli_auth_credentials_store"].as_str(),
+            Some("keyring")
+        );
+    }
+
+    #[test]
     fn reveals_only_the_requested_provider_key() {
         let temp = tempfile::tempdir().unwrap();
         let store = Store::open(temp.path()).unwrap();
@@ -1623,7 +1788,7 @@ mod tests {
     }
 
     #[test]
-    fn unsupported_auth_store_never_modifies_codex_files() {
+    fn provider_switch_forces_file_auth_store() {
         let temp = tempfile::tempdir().unwrap();
         let data_dir = temp.path().join("data");
         let home = temp.path().join("home");
@@ -1642,14 +1807,28 @@ mod tests {
             .upsert_provider_config(&test_provider_row("profile", "relay", "sk-relay"))
             .unwrap();
 
-        let error = switch(&data_dir, &store, "profile", "relay").unwrap_err();
-        assert!(error.to_string().contains("不支持当前认证存储方式"));
-        assert_eq!(fs::read(home.join("config.toml")).unwrap(), config_before);
-        assert_eq!(fs::read(home.join("auth.json")).unwrap(), auth_before);
+        switch(&data_dir, &store, "profile", "relay").unwrap();
+
+        let config = fs::read_to_string(home.join("config.toml")).unwrap();
+        let parsed = config.parse::<toml::Value>().unwrap();
+        assert_eq!(
+            parsed["cli_auth_credentials_store"].as_str(),
+            Some(FILE_AUTH_STORE)
+        );
+        assert_eq!(parsed["disable_response_storage"].as_bool(), Some(true));
+        assert_eq!(parsed["service_tier"].as_str(), Some(DEFAULT_SERVICE_TIER));
+        assert_eq!(parsed["model_provider"].as_str(), Some("relay"));
+        assert_eq!(
+            serde_json::from_slice::<JsonValue>(&fs::read(home.join("auth.json")).unwrap())
+                .unwrap(),
+            json!({ "OPENAI_API_KEY": "sk-relay" })
+        );
+        assert_ne!(fs::read(home.join("config.toml")).unwrap(), config_before);
+        assert_ne!(fs::read(home.join("auth.json")).unwrap(), auth_before);
     }
 
     #[test]
-    fn corrupted_official_snapshot_blocks_restore_without_modifying_files() {
+    fn corrupted_official_snapshot_blocks_restore_after_required_config_normalization() {
         let temp = tempfile::tempdir().unwrap();
         let data_dir = temp.path().join("data");
         let home = temp.path().join("home");
@@ -1677,7 +1856,16 @@ mod tests {
         assert!(!view.can_switch);
         let error = switch(&data_dir, &store, "profile", OFFICIAL_ID).unwrap_err();
         assert!(error.to_string().contains("完整性校验失败"));
-        assert_eq!(fs::read(home.join("config.toml")).unwrap(), config_before);
+        let config = fs::read_to_string(home.join("config.toml")).unwrap();
+        let parsed = config.parse::<toml::Value>().unwrap();
+        assert_eq!(parsed["model_provider"].as_str(), Some("relay"));
+        assert_eq!(
+            parsed["cli_auth_credentials_store"].as_str(),
+            Some(FILE_AUTH_STORE)
+        );
+        assert_eq!(parsed["disable_response_storage"].as_bool(), Some(true));
+        assert_eq!(parsed["service_tier"].as_str(), Some(DEFAULT_SERVICE_TIER));
+        assert_ne!(fs::read(home.join("config.toml")).unwrap(), config_before);
         assert_eq!(fs::read(home.join("auth.json")).unwrap(), auth_before);
     }
 
