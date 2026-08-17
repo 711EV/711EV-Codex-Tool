@@ -12,10 +12,10 @@ jobs:
   build-windows:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
-          node-version: 20
+          node-version: 24
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
@@ -48,7 +48,7 @@ jobs:
           Copy-Item "src-tauri/target/release/711EV-Codex-Tool.exe" "release-assets/$portableName"
           Copy-Item $installer.FullName "release-assets/$installerName"
           Copy-Item $signature "release-assets/$installerName.sig"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: windows-release
           path: release-assets/*
@@ -57,10 +57,10 @@ jobs:
   build-macos:
     runs-on: macos-14
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
-          node-version: 20
+          node-version: 24
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-apple-darwin,x86_64-apple-darwin
@@ -91,7 +91,7 @@ jobs:
           cp "$dmg" "release-assets/711EV-Codex-Tool-${version}-macOS-universal.dmg"
           cp "$updater" "release-assets/711EV-Codex-Tool-${version}-macOS-updater.app.tar.gz"
           cp "$updater.sig" "release-assets/711EV-Codex-Tool-${version}-macOS-updater.app.tar.gz.sig"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: macos-release
           path: release-assets/*
@@ -101,8 +101,8 @@ jobs:
     needs: [build-windows, build-macos]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
         with:
           pattern: "*-release"
           path: release-assets
@@ -110,68 +110,6 @@ jobs:
       - name: Create cross-platform update manifest
         run: node .github/scripts/create-update-manifest.mjs release-assets "$GITHUB_REPOSITORY"
       - name: Publish GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          name: 711EV-Codex-Tool ${{ github.ref_name }}
-          body: |
-            本版本提供以下下载文件：
-
-            - Windows 便携版：无需安装，下载后可直接运行。
-            - Windows 安装包：支持选择安装目录并创建桌面快捷方式。
-            - macOS 通用安装包：同时支持 Intel 与 Apple Silicon 设备。
-
-            `.sig` 和 `latest.json` 为应用自动更新所需文件，普通用户无需手动下载。
-          files: release-assets/*
-          fail_on_unmatched_files: true
-          overwrite_files: true
-      - name: 添加中文下载标签
-        uses: actions/github-script@v7
         env:
-          RELEASE_TAG: ${{ github.ref_name }}
-        with:
-          script: |
-            const { owner, repo } = context.repo;
-            const tag = process.env.RELEASE_TAG;
-            const version = tag.replace(/^v/, "");
-            const release = await github.rest.repos.getReleaseByTag({ owner, repo, tag });
-            const assets = await github.paginate(github.rest.repos.listReleaseAssets, {
-              owner,
-              repo,
-              release_id: release.data.id,
-              per_page: 100,
-            });
-            const labels = {
-              [`711EV-Codex-Tool-${version}-Windows-portable.exe`]: `Windows 便携版（版本 ${version}，Windows x64）`,
-              [`711EV-Codex-Tool-${version}-Windows-setup.exe`]: `Windows 安装包（版本 ${version}，Windows x64）`,
-              [`711EV-Codex-Tool-${version}-Windows-setup.exe.sig`]: `Windows 安装包签名（版本 ${version}）`,
-              [`711EV-Codex-Tool-${version}-macOS-universal.dmg`]: `macOS 通用安装包（版本 ${version}，Intel / Apple Silicon）`,
-              [`711EV-Codex-Tool-${version}-macOS-updater.app.tar.gz`]: `macOS 自动更新包（版本 ${version}，Intel / Apple Silicon）`,
-              [`711EV-Codex-Tool-${version}-macOS-updater.app.tar.gz.sig`]: `macOS 自动更新签名（版本 ${version}）`,
-              "latest.json": `自动更新清单（版本 ${version}）`,
-            };
-            const expectedNames = new Set(Object.keys(labels));
-            for (const asset of assets) {
-              if (expectedNames.has(asset.name)) continue;
-              await github.rest.repos.deleteReleaseAsset({
-                owner,
-                repo,
-                asset_id: asset.id,
-              });
-            }
-            const uploadedNames = new Set(assets.map((asset) => asset.name));
-            const missing = Object.keys(labels).filter((name) => !uploadedNames.has(name));
-            if (missing.length > 0) {
-              core.setFailed(`缺少发布文件：${missing.join(", ")}`);
-              return;
-            }
-            for (const asset of assets) {
-              const label = labels[asset.name];
-              if (!label) continue;
-              await github.rest.repos.updateReleaseAsset({
-                owner,
-                repo,
-                asset_id: asset.id,
-                name: asset.name,
-                label,
-              });
-            }
+          GH_TOKEN: ${{ github.token }}
+        run: node .github/scripts/publish-release.mjs release-assets "$GITHUB_REPOSITORY" "$GITHUB_REF_NAME"
