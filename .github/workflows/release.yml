@@ -149,6 +149,15 @@ jobs:
               [`711EV-Codex-Tool-${version}-macOS-updater.app.tar.gz.sig`]: `macOS 自动更新签名（版本 ${version}）`,
               "latest.json": `自动更新清单（版本 ${version}）`,
             };
+            const expectedNames = new Set(Object.keys(labels));
+            for (const asset of assets) {
+              if (expectedNames.has(asset.name)) continue;
+              await github.rest.repos.deleteReleaseAsset({
+                owner,
+                repo,
+                asset_id: asset.id,
+              });
+            }
             const uploadedNames = new Set(assets.map((asset) => asset.name));
             const missing = Object.keys(labels).filter((name) => !uploadedNames.has(name));
             if (missing.length > 0) {
