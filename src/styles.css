@@ -1668,6 +1668,14 @@ select:focus,
   color: var(--text-disabled);
 }
 
+.provider-config-field input:disabled {
+  color: var(--text-tertiary);
+  background: rgba(255, 255, 255, 0.035);
+  border-color: rgba(255, 255, 255, 0.08);
+  cursor: not-allowed;
+  opacity: 1;
+}
+
 .provider-config-modal {
   width: min(600px, 100%);
   overflow: hidden;
@@ -1718,6 +1726,11 @@ select:focus,
 
 .provider-secret-control input {
   padding-right: 42px;
+}
+
+.provider-secret-control input::-ms-reveal,
+.provider-secret-control input::-ms-clear {
+  display: none;
 }
 
 .provider-secret-toggle {
