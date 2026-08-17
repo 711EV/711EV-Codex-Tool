@@ -15,6 +15,7 @@ import {
   Folder,
   GitFork,
   LoaderCircle,
+  LogOut,
   MoveRight,
   Plus,
   Pencil,
@@ -550,17 +551,23 @@ async function runChildCleanup(force = false) {
 }
 
 async function retryForcedOperation() {
-  if (pendingForceOperation.value === "provider-switch-restart") {
+  const operation = pendingForceOperation.value;
+  if (!operation) return;
+
+  forceClosePrompt.value = false;
+  pendingForceOperation.value = null;
+
+  if (operation === "provider-switch-restart") {
     await restartAfterProviderSwitch(true);
-  } else if (pendingForceOperation.value === "client-restart") {
+  } else if (operation === "client-restart") {
     await restartCodexDesktop(true);
-  } else if (pendingForceOperation.value === "child-cleanup") {
+  } else if (operation === "child-cleanup") {
     await runChildCleanup(true);
-  } else if (pendingForceOperation.value === "archive-cleanup") {
+  } else if (operation === "archive-cleanup") {
     await runArchiveCleanup(true);
-  } else if (pendingForceOperation.value === "update-sync") {
+  } else if (operation === "update-sync") {
     await runUpdateSync(true);
-  } else if (pendingForceOperation.value === "migration") {
+  } else if (operation === "migration") {
     await runMigration(true);
   } else {
     await runReplication(true);
@@ -578,7 +585,7 @@ async function restartCodexDesktop(force = false) {
     restartPrompt.value = null;
     forceClosePrompt.value = false;
     pendingForceOperation.value = null;
-    notice.value = "Codex Desktop 已重启，会话列表将重新加载";
+    notice.value = "Codex 客户端已重启，会话列表将重新加载";
   } catch (reason) {
     const message = reason instanceof Error ? reason.message : String(reason);
     if (!force && message.includes("confirm force close and retry")) {
@@ -725,7 +732,7 @@ async function restartAfterProviderSwitch(force = false) {
     providerSwitchResult.value = null;
     forceClosePrompt.value = false;
     pendingForceOperation.value = null;
-    notice.value = "Codex Desktop 已重启，并会读取刚刚写入的供应商配置";
+    notice.value = "Codex 客户端已重启，并会读取刚刚写入的供应商配置";
   } catch (reason) {
     const message = reason instanceof Error ? reason.message : String(reason);
     if (!force && message.includes("confirm force close and retry")) {
@@ -1817,15 +1824,15 @@ async function installApplicationUpdate() {
     <div v-if="providerSwitchResult" class="modal-backdrop high-priority">
       <section class="modal restart-client-modal">
         <div class="modal-heading">
-          <div><p class="eyebrow">供应商切换完成</p><h2>是否重启 Codex Desktop？</h2></div>
+          <div><p class="eyebrow">供应商切换完成</p><h2>是否重启 Codex 客户端？</h2></div>
           <button class="icon-button" title="关闭" :disabled="providerSwitchRestarting" @click="dismissProviderSwitchRestart"><X :size="18" /></button>
         </div>
-        <p class="restart-client-summary">配置已经写入磁盘。重启 Desktop 后它才会读取新的供应商和认证状态；CLI 下次运行时会读取最新配置。</p>
+        <p class="restart-client-summary">配置已经写入磁盘。重启客户端后会读取新的供应商和认证状态；CLI 下次运行时会读取最新配置。</p>
         <div class="restart-client-warning"><AlertTriangle :size="17" /><span>工具不会判断当前是否有运行任务，请根据实际情况决定是否现在重启。</span></div>
         <div class="modal-actions">
           <button class="secondary-button" :disabled="providerSwitchRestarting" @click="dismissProviderSwitchRestart">暂不重启</button>
           <button class="primary-button" :disabled="providerSwitchRestarting" @click="restartAfterProviderSwitch(false)">
-            <LoaderCircle v-if="providerSwitchRestarting" :size="16" class="spinning" /><RefreshCw v-else :size="16" />重启 Desktop
+            <LoaderCircle v-if="providerSwitchRestarting" :size="16" class="spinning" /><RefreshCw v-else :size="16" />重启客户端
           </button>
         </div>
       </section>
@@ -1834,16 +1841,16 @@ async function installApplicationUpdate() {
     <div v-if="forceClosePrompt" class="modal-backdrop high-priority">
       <section class="modal force-close-modal">
         <div class="modal-heading">
-          <div><p class="eyebrow danger-text">操作被阻止</p><h2>Codex 客户端未能正常退出</h2></div>
+          <div><p class="eyebrow">需要确认</p><h2>Codex 客户端退出失败</h2></div>
           <button class="icon-button" title="关闭" @click="closeForcePrompt"><X :size="18" /></button>
         </div>
-        <div class="force-close-warning"><AlertTriangle :size="17" /><span>强制结束可能中断正在执行的任务或尚未落盘的数据。只会处理与当前 CODEX_HOME 匹配的客户端进程。</span></div>
+        <div class="force-close-warning"><CircleAlert :size="17" /><span>Codex 客户端未能自动退出，需要强制退出后才能继续当前操作。</span></div>
         <div class="modal-actions">
           <button class="secondary-button" @click="closeForcePrompt">
-            {{ pendingForceOperation === "archive-cleanup" || pendingForceOperation === "child-cleanup" ? "取消清理" : pendingForceOperation === "update-sync" ? "取消同步" : pendingForceOperation === "client-restart" ? "取消重启" : pendingForceOperation === "migration" ? "取消迁移" : "取消复制" }}
+            {{ pendingForceOperation === "archive-cleanup" || pendingForceOperation === "child-cleanup" ? "取消清理" : pendingForceOperation === "update-sync" ? "取消同步" : pendingForceOperation === "client-restart" || pendingForceOperation === "provider-switch-restart" ? "取消重启" : pendingForceOperation === "migration" ? "取消迁移" : "取消复制" }}
           </button>
-          <button class="danger-button" :disabled="workspace.syncing || workspace.migrating || workspace.restartingClient || workspace.cleaningArchived || workspace.cleaningChildren" @click="retryForcedOperation">
-            <Trash2 :size="17" />强制结束并继续
+          <button class="primary-button" :disabled="workspace.syncing || workspace.migrating || workspace.restartingClient || workspace.cleaningArchived || workspace.cleaningChildren || providerSwitchRestarting" @click="retryForcedOperation">
+            <LogOut :size="17" />强制退出并继续
           </button>
         </div>
       </section>
@@ -1855,15 +1862,15 @@ async function installApplicationUpdate() {
     >
       <section class="modal restart-client-modal">
         <div class="modal-heading">
-          <div><p class="eyebrow">{{ restartPrompt.operation }}完成</p><h2>是否重启 Codex Desktop？</h2></div>
+          <div><p class="eyebrow">{{ restartPrompt.operation }}完成</p><h2>是否重启 Codex 客户端？</h2></div>
           <button class="icon-button" title="关闭" :disabled="workspace.restartingClient" @click="dismissRestartPrompt"><X :size="18" /></button>
         </div>
         <p class="restart-client-summary">
-          已{{ restartPrompt.operation }} {{ restartPrompt.completedCount }} 条会话。重启后，新会话才会显示在 Codex Desktop 的会话列表中。
+          已{{ restartPrompt.operation }} {{ restartPrompt.completedCount }} 条会话。重启后，新会话才会显示在 Codex 客户端的会话列表中。
         </p>
         <div class="restart-client-warning">
           <AlertTriangle :size="17" />
-          <span>重启会关闭当前 Desktop 客户端。如果有正在运行的任务，请选择“暂不重启”，任务完成后再手动重启。</span>
+          <span>重启会关闭当前 Codex 客户端。如果有正在运行的任务，请选择“暂不重启”，任务完成后再手动重启。</span>
         </div>
         <div class="restart-cli-note">
           <CircleAlert :size="17" />
@@ -1884,7 +1891,7 @@ async function installApplicationUpdate() {
           >
             <LoaderCircle v-if="workspace.restartingClient" :size="17" class="spinning" />
             <RefreshCw v-else :size="17" />
-            重启 Desktop
+            重启客户端
           </button>
         </div>
       </section>

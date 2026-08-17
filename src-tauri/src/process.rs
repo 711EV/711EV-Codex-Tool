@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::Path;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -77,7 +78,8 @@ fn matches_target_client(
     command: &str,
     environment: &str,
 ) -> bool {
-    if !is_desktop_client_process(process_stem, executable) {
+    if !is_desktop_client_process(process_stem, executable) || is_desktop_auxiliary_process(command)
+    {
         return false;
     }
     if target_executable
@@ -107,6 +109,13 @@ fn is_desktop_client_process(process_stem: &str, executable: Option<&str>) -> bo
         || (process_stem == "codex"
             && executable
                 .is_some_and(|path| normalize_text(path).contains(".app\\contents\\macos")))
+}
+
+fn is_desktop_auxiliary_process(command: &str) -> bool {
+    command
+        .split_whitespace()
+        .map(str::to_ascii_lowercase)
+        .any(|argument| argument == "--type" || argument.starts_with("--type="))
 }
 
 pub fn restart(app_path: Option<&str>, codex_home: &Path) -> AppResult<bool> {
@@ -146,7 +155,7 @@ pub fn restart(app_path: Option<&str>, codex_home: &Path) -> AppResult<bool> {
     #[cfg(target_os = "windows")]
     if !wait_for_client_start(path, Duration::from_secs(10)) {
         return Err(AppError::Message(
-            "已发送 Codex Desktop 启动命令，但未检测到客户端进程".into(),
+            "已发送 Codex 客户端启动命令，但未检测到客户端进程".into(),
         ));
     }
     Ok(true)
@@ -209,6 +218,7 @@ pub fn ensure_stopped(
             executable: None,
         });
     }
+    let process_tree_pids = collect_process_tree_pids(&pids);
     request_graceful_exit(&pids)?;
     if wait_for_exit(&pids, Duration::from_secs(12)) {
         return Ok(ShutdownOutcome {
@@ -221,8 +231,8 @@ pub fn ensure_stopped(
             "target client did not exit normally; confirm force close and retry".into(),
         ));
     }
-    force_exit(&pids)?;
-    if !wait_for_exit(&pids, Duration::from_secs(5)) {
+    force_exit(&process_tree_pids)?;
+    if !wait_for_exit(&process_tree_pids, Duration::from_secs(5)) {
         return Err(AppError::Message(
             "target client is still running after force close".into(),
         ));
@@ -231,6 +241,41 @@ pub fn ensure_stopped(
         closed: true,
         executable,
     })
+}
+
+fn collect_process_tree_pids(root_pids: &[u32]) -> Vec<u32> {
+    let mut system = System::new();
+    system.refresh_processes(ProcessesToUpdate::All, true);
+    let mut targets = root_pids
+        .iter()
+        .copied()
+        .map(Pid::from_u32)
+        .collect::<HashSet<_>>();
+
+    loop {
+        let descendants = system
+            .processes()
+            .iter()
+            .filter_map(|(pid, process)| {
+                process
+                    .parent()
+                    .is_some_and(|parent| targets.contains(&parent))
+                    .then_some(*pid)
+            })
+            .collect::<Vec<_>>();
+        let previous_count = targets.len();
+        targets.extend(descendants);
+        if targets.len() == previous_count {
+            break;
+        }
+    }
+
+    let mut pids = targets
+        .into_iter()
+        .map(|pid| pid.as_u32())
+        .collect::<Vec<_>>();
+    pids.sort_unstable();
+    pids
 }
 
 fn wait_for_exit(pids: &[u32], timeout: Duration) -> bool {
@@ -364,6 +409,38 @@ mod tests {
             "chatgpt",
             Some(app_path),
             "ChatGPT.exe",
+            "",
+        ));
+    }
+
+    #[test]
+    fn excludes_chromium_auxiliary_processes_from_exit_waiting() {
+        let app_path = r"C:\Program Files\WindowsApps\OpenAI.Codex\app\ChatGPT.exe";
+        assert!(!matches_target_client(
+            r"f:\codex",
+            true,
+            Some(app_path),
+            "chatgpt",
+            Some(app_path),
+            &format!(r#""{app_path}" --type=renderer --renderer-client-id=3"#),
+            "",
+        ));
+        assert!(!matches_target_client(
+            r"f:\codex",
+            true,
+            Some(app_path),
+            "chatgpt",
+            Some(app_path),
+            &format!(r#""{app_path}" --type=crashpad-handler"#),
+            "",
+        ));
+        assert!(matches_target_client(
+            r"f:\codex",
+            true,
+            Some(app_path),
+            "chatgpt",
+            Some(app_path),
+            &format!(r#""{app_path}""#),
             "",
         ));
     }

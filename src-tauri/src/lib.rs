@@ -354,7 +354,7 @@ async fn restart_codex_client(
             .or(shutdown.executable.as_deref());
         let started = process::restart(app_path, &home).map_err(String::from)?;
         if !started {
-            return Err("未检测到 Codex Desktop 启动路径".into());
+            return Err("未检测到 Codex 客户端启动路径".into());
         }
         Ok(true)
     })
