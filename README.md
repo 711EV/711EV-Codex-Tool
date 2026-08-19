@@ -8,8 +8,9 @@
 
 ### 存储位置与供应商
 
-- 自动发现 `CODEX_HOME`、默认 `~/.codex`、运行中的 Codex/ChatGPT 客户端及受支持切换工具使用的存储位置。
+- 自动发现 `CODEX_HOME`、默认 `~/.codex`、运行中的 Codex/ChatGPT 客户端及受支持切换工具使用的存储位置，并通过 Codex 特征校验排除 Claude 等非 Codex 目录。
 - 在已发现的多个存储位置之间切换；只有一个位置时，切换按钮保留但不可用。
+- 重新发现时清理工具自身的无效历史索引；路径暂时不可访问时仅标记为暂不可用，不删除用户文件。
 - 从主 `config.toml` 和本地 rollout 中识别官方供应商、当前中转供应商及历史中转供应商。
 - 添加、编辑和保存中转供应商，管理供应商标识、API 请求地址与 API 密钥。
 - 提供 711EV 配置预填，也允许继续修改预填内容。
@@ -29,6 +30,7 @@
 
 - 首次启动、切换供应商、切换存储位置和手动刷新时重新扫描本地状态。
 - 耗时扫描与会话操作在后台执行，减少界面未响应。
+- 复制和迁移弹窗实时显示总体进度、当前会话、处理阶段以及每条会话的执行状态。
 - 复制、迁移或供应商切换完成后，由用户决定是否重启 Codex 客户端。
 - 支持应用内检查更新，并展示项目 GitHub Star 数量。
 
@@ -67,13 +69,13 @@
 4. 把 `auth.json` 替换为只包含当前 `OPENAI_API_KEY` 的认证文件。
 5. 校验写入结果，并在完成后询问是否重启 Codex 客户端。
 
-供应商切换只支持主 `config.toml` 明确设置：
+供应商切换只使用主 `config.toml`。工具在首次扫描、重新发现和切换前会自动补齐必要字段，并始终将认证存储方式设置为文件模式：
 
 ```toml
 cli_auth_credentials_store = "file"
 ```
 
-使用 `keyring`、未明确设置或无法识别的认证存储方式时，工具会阻止切换，不会修改认证文件。
+如果原来配置为 `keyring`、其他值或未设置，工具会将主配置改为 `file`；`disable_response_storage` 和 `service_tier` 仅在缺失时补齐，不覆盖用户已有值。工具不处理 `work.config.toml`、Profile 或项目级覆盖配置。
 
 ### 切换到官方供应商
 
@@ -216,4 +218,5 @@ npm run build
 - [QQ 交流群](https://qm.qq.com/q/e9xHZxgN4Q)
 - [711EV 导航](https://www.711ev.com/)
 - [711EV 中转站](https://ai.711ev.com/)
+- [使用教程](https://docs.711ev.com/#/711ev-relay/guide/codex-tool)
 - [GitHub 项目](https://github.com/711EV/711EV-Codex-Tool)

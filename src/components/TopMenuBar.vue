@@ -7,13 +7,14 @@ import {
   ChevronsUpDown,
   Database,
   Github,
-  MessageCircle,
+  BookOpen,
   Navigation,
   Rocket,
   Zap,
 } from "lucide-vue-next";
 import { fetchRepositoryStarCount } from "../api/github";
 import type { Profile } from "../types";
+import QQLogo from "./QQLogo.vue";
 
 const props = defineProps<{
   codexHome?: string | null;
@@ -60,11 +61,6 @@ const menuLinks = [
     icon: Rocket,
   },
   {
-    label: "交流群",
-    url: "https://qm.qq.com/q/e9xHZxgN4Q",
-    icon: MessageCircle,
-  },
-  {
     label: "711EV导航",
     url: "https://www.711ev.com/",
     icon: Navigation,
@@ -73,6 +69,16 @@ const menuLinks = [
     label: "711EV中转站",
     url: "https://ai.711ev.com/",
     icon: Zap,
+  },
+  {
+    label: "使用教程",
+    url: "https://docs.711ev.com/#/711ev-relay/guide/codex-tool",
+    icon: BookOpen,
+  },
+  {
+    label: "交流群",
+    url: "https://qm.qq.com/q/e9xHZxgN4Q",
+    icon: QQLogo,
   },
 ] as const;
 

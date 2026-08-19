@@ -351,7 +351,7 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     }
   }
 
-  async function executeReplication(forceCloseClient = false) {
+  async function executeReplication(requestId: string, forceCloseClient = false) {
     if (!activeProfileId.value) throw new Error("未选择 CODEX_HOME");
     syncing.value = true;
     error.value = null;
@@ -359,6 +359,7 @@ export const useWorkspaceStore = defineStore("workspace", () => {
       const result = await backend.replicationExecute(
         activeProfileId.value,
         selectedThreadIds.value,
+        requestId,
         forceCloseClient,
       );
       lastResult.value = result;
@@ -373,7 +374,7 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     }
   }
 
-  async function executeMigration(forceCloseClient = false) {
+  async function executeMigration(requestId: string, forceCloseClient = false) {
     if (!activeProfileId.value) throw new Error("未选择 CODEX_HOME");
     migrating.value = true;
     error.value = null;
@@ -381,6 +382,7 @@ export const useWorkspaceStore = defineStore("workspace", () => {
       const result = await backend.replicationMigrate(
         activeProfileId.value,
         selectedThreadIds.value,
+        requestId,
         forceCloseClient,
       );
       lastResult.value = result;

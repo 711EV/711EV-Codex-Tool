@@ -490,7 +490,7 @@ dependencies = [
 
 [[package]]
 name = "codex-local-sync"
-version = "0.1.97"
+version = "0.1.102"
 dependencies = [
  "chrono",
  "dirs",

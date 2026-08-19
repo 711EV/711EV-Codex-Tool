@@ -21,6 +21,9 @@ export interface Profile {
   providerId: string;
   appPath: string | null;
   discoverySource: string;
+  discoveryState: "active" | "unavailable";
+  lastSeenAt: string | null;
+  unavailableReason: string | null;
   providers: DiscoveredProvider[];
   configProfiles: DiscoveredConfigProfile[];
   createdAt: string;
@@ -52,6 +55,8 @@ export interface DiscoveryReport {
   discoveredCount: number;
   addedCount: number;
   refreshedCount: number;
+  removedCount: number;
+  unavailableCount: number;
   profiles: Profile[];
 }
 
@@ -200,6 +205,46 @@ export interface ReplicationResult {
   failed: ReplicaResultItem[];
   clientRestarted: boolean;
   warning: string | null;
+}
+
+export type ReplicationProgressOperation = "replication" | "migration";
+export type ReplicationProgressStatus = "running" | "completed" | "failed";
+export type ReplicationProgressPhase =
+  | "preparing"
+  | "reading_source"
+  | "creating_replica"
+  | "waiting_for_rollout"
+  | "updating_provider"
+  | "restoring_title"
+  | "verifying_replica"
+  | "saving_mapping"
+  | "deleting_source"
+  | "finishing"
+  | "completed"
+  | "skipped"
+  | "failed";
+export type ReplicationProgressItemStatus =
+  | "processing"
+  | "completed"
+  | "skipped"
+  | "failed";
+
+export interface ReplicationProgress {
+  requestId: string;
+  jobId: string;
+  operation: ReplicationProgressOperation;
+  status: ReplicationProgressStatus;
+  phase: ReplicationProgressPhase;
+  total: number;
+  completed: number;
+  created: number;
+  skipped: number;
+  failed: number;
+  percent: number;
+  currentThreadId: string | null;
+  currentTitle: string | null;
+  itemStatus: ReplicationProgressItemStatus | null;
+  message: string | null;
 }
 
 export type UpdateSyncAction =

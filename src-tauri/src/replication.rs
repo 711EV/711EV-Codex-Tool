@@ -16,8 +16,9 @@ use crate::models::{
     ArchiveCleanupItem, ArchiveCleanupPreview, ArchiveCleanupResult, ArchiveCleanupResultItem,
     Profile, ProviderBucket, ProviderSessionRecord, ProviderWorkspaceSnapshot, ReplicaMapping,
     ReplicaResultItem, ReplicationAction, ReplicationEligibility, ReplicationPlanItem,
-    ReplicationPreview, ReplicationResult, ThreadSourceKind, UpdateSyncAction, UpdateSyncPlanItem,
-    UpdateSyncPreview,
+    ReplicationPreview, ReplicationProgress, ReplicationProgressItemStatus,
+    ReplicationProgressOperation, ReplicationProgressPhase, ReplicationProgressStatus,
+    ReplicationResult, ThreadSourceKind, UpdateSyncAction, UpdateSyncPlanItem, UpdateSyncPreview,
 };
 use crate::process;
 use crate::profiles;
@@ -30,6 +31,136 @@ struct ClientRestartGuard {
     app_path: Option<String>,
     home: PathBuf,
     active: bool,
+}
+
+struct ReplicationProgressTracker<'a> {
+    request_id: &'a str,
+    job_id: &'a str,
+    operation: ReplicationProgressOperation,
+    total: usize,
+    completed: usize,
+    created: usize,
+    skipped: usize,
+    failed: usize,
+    report: &'a dyn Fn(ReplicationProgress),
+}
+
+impl<'a> ReplicationProgressTracker<'a> {
+    fn new(
+        request_id: &'a str,
+        job_id: &'a str,
+        operation: ReplicationProgressOperation,
+        total: usize,
+        report: &'a dyn Fn(ReplicationProgress),
+    ) -> Self {
+        Self {
+            request_id,
+            job_id,
+            operation,
+            total,
+            completed: 0,
+            created: 0,
+            skipped: 0,
+            failed: 0,
+            report,
+        }
+    }
+
+    fn set_total(&mut self, total: usize) {
+        self.total = total;
+    }
+
+    fn stage(&self, item: &ReplicationPlanItem, phase: ReplicationProgressPhase) {
+        self.emit(
+            ReplicationProgressStatus::Running,
+            phase,
+            Some(item),
+            Some(ReplicationProgressItemStatus::Processing),
+            None,
+        );
+    }
+
+    fn finish_item(
+        &mut self,
+        item: &ReplicationPlanItem,
+        status: ReplicationProgressItemStatus,
+        message: String,
+    ) {
+        self.completed += 1;
+        let phase = match status {
+            ReplicationProgressItemStatus::Completed => {
+                self.created += 1;
+                ReplicationProgressPhase::Completed
+            }
+            ReplicationProgressItemStatus::Skipped => {
+                self.skipped += 1;
+                ReplicationProgressPhase::Skipped
+            }
+            ReplicationProgressItemStatus::Failed => {
+                self.failed += 1;
+                ReplicationProgressPhase::Failed
+            }
+            ReplicationProgressItemStatus::Processing => return,
+        };
+        self.emit(
+            ReplicationProgressStatus::Running,
+            phase,
+            Some(item),
+            Some(status),
+            Some(message),
+        );
+    }
+
+    fn batch_stage(&self, phase: ReplicationProgressPhase, message: Option<String>) {
+        self.emit(
+            ReplicationProgressStatus::Running,
+            phase,
+            None,
+            None,
+            message,
+        );
+    }
+
+    fn finish_batch(&self, status: ReplicationProgressStatus, message: Option<String>) {
+        let phase = match status {
+            ReplicationProgressStatus::Completed => ReplicationProgressPhase::Completed,
+            ReplicationProgressStatus::Failed => ReplicationProgressPhase::Failed,
+            ReplicationProgressStatus::Running => ReplicationProgressPhase::Finishing,
+        };
+        self.emit(status, phase, None, None, message);
+    }
+
+    fn emit(
+        &self,
+        status: ReplicationProgressStatus,
+        phase: ReplicationProgressPhase,
+        item: Option<&ReplicationPlanItem>,
+        item_status: Option<ReplicationProgressItemStatus>,
+        message: Option<String>,
+    ) {
+        let percent = if self.total == 0 {
+            usize::from(status == ReplicationProgressStatus::Completed) * 100
+        } else {
+            (self.completed.saturating_mul(100) / self.total).min(100)
+        };
+        (self.report)(ReplicationProgress {
+            request_id: self.request_id.into(),
+            job_id: self.job_id.into(),
+            operation: self.operation,
+            status,
+            phase,
+            total: self.total,
+            completed: self.completed,
+            created: self.created,
+            skipped: self.skipped,
+            failed: self.failed,
+            percent,
+            current_thread_id: item.map(|item| item.thread_id.clone()),
+            current_title: item.map(|item| item.title.clone()),
+            item_status,
+            message,
+        });
+    }
 }
 
 impl ClientRestartGuard {
@@ -700,18 +831,22 @@ pub fn execute(
     profile: &Profile,
     selected_ids: &[String],
     force_close_client: bool,
+    request_id: &str,
+    report: &dyn Fn(ReplicationProgress),
 ) -> AppResult<ReplicationResult> {
     let target_provider = current_provider(profile)?;
     let job_id = Uuid::new_v4().to_string();
-    execute_inner(
+    execute_with_progress(
         data_dir,
         store,
         profile,
         selected_ids,
         force_close_client,
+        request_id,
         &job_id,
         &target_provider,
         false,
+        report,
     )
 }
 
@@ -721,19 +856,68 @@ pub fn migrate(
     profile: &Profile,
     selected_ids: &[String],
     force_close_client: bool,
+    request_id: &str,
+    report: &dyn Fn(ReplicationProgress),
 ) -> AppResult<ReplicationResult> {
     let target_provider = current_provider(profile)?;
     let job_id = Uuid::new_v4().to_string();
-    execute_inner(
+    execute_with_progress(
         data_dir,
         store,
         profile,
         selected_ids,
         force_close_client,
+        request_id,
         &job_id,
         &target_provider,
         true,
+        report,
     )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn execute_with_progress(
+    data_dir: &Path,
+    store: &Store,
+    profile: &Profile,
+    selected_ids: &[String],
+    force_close_client: bool,
+    request_id: &str,
+    job_id: &str,
+    expected_target_provider: &str,
+    migrate_sources: bool,
+    report: &dyn Fn(ReplicationProgress),
+) -> AppResult<ReplicationResult> {
+    let operation = if migrate_sources {
+        ReplicationProgressOperation::Migration
+    } else {
+        ReplicationProgressOperation::Replication
+    };
+    let mut progress =
+        ReplicationProgressTracker::new(request_id, job_id, operation, selected_ids.len(), report);
+    progress.batch_stage(
+        ReplicationProgressPhase::Preparing,
+        Some("正在准备执行环境".into()),
+    );
+
+    let result = execute_inner(
+        data_dir,
+        store,
+        profile,
+        selected_ids,
+        force_close_client,
+        job_id,
+        expected_target_provider,
+        migrate_sources,
+        &mut progress,
+    );
+    match &result {
+        Ok(_) => progress.finish_batch(ReplicationProgressStatus::Completed, None),
+        Err(error) => {
+            progress.finish_batch(ReplicationProgressStatus::Failed, Some(error.to_string()))
+        }
+    }
+    result
 }
 
 pub fn preview_updates(store: &Store, profile: &Profile) -> AppResult<UpdateSyncPreview> {
@@ -1083,6 +1267,7 @@ fn execute_inner(
     job_id: &str,
     expected_target_provider: &str,
     migrate_sources: bool,
+    progress: &mut ReplicationProgressTracker<'_>,
 ) -> AppResult<ReplicationResult> {
     let home = profile.home_path();
     let shutdown = process::ensure_stopped(&home, profile.app_path.as_deref(), force_close_client)?;
@@ -1120,6 +1305,14 @@ fn execute_inner(
             "current Provider changed after preview; rescan before retrying".into(),
         ));
     }
+    progress.set_total(execution_preview.items.len());
+    progress.batch_stage(
+        ReplicationProgressPhase::Preparing,
+        Some(format!(
+            "已生成 {} 条会话的执行计划",
+            execution_preview.items.len()
+        )),
+    );
     let snapshots = scan_profile(profile)?
         .into_iter()
         .map(|snapshot| (snapshot.thread_id.clone(), snapshot))
@@ -1131,29 +1324,56 @@ fn execute_inner(
 
     for item in &execution_preview.items {
         if item.action != ReplicationAction::CreateReplica {
-            skipped.push(ReplicaResultItem {
+            let result = ReplicaResultItem {
                 source_thread_id: item.thread_id.clone(),
                 replica_thread_id: item.replica_thread_id.clone(),
                 title: item.title.clone(),
                 status: action_status(&item.action).into(),
                 message: item.reason.clone(),
-            });
+            };
+            progress.finish_item(
+                item,
+                ReplicationProgressItemStatus::Skipped,
+                result.message.clone(),
+            );
+            skipped.push(result);
             continue;
         }
         assert_current_provider(profile, expected_target_provider)?;
+        progress.stage(item, ReplicationProgressPhase::ReadingSource);
         let Some(source) = snapshots.get(&item.thread_id) else {
-            failed.push(failed_item(item, None, "来源会话在执行前消失"));
+            let result = failed_item(item, None, "来源会话在执行前消失");
+            progress.finish_item(
+                item,
+                ReplicationProgressItemStatus::Failed,
+                result.message.clone(),
+            );
+            failed.push(result);
             continue;
         };
         if source.raw_sha256 != item.source_sha256
             || hash_file_raw(&source.rollout_path)? != item.source_sha256
         {
-            failed.push(failed_item(item, None, "来源会话在执行前发生变化"));
+            let result = failed_item(item, None, "来源会话在执行前发生变化");
+            progress.finish_item(
+                item,
+                ReplicationProgressItemStatus::Failed,
+                result.message.clone(),
+            );
+            failed.push(result);
             continue;
         }
-        match replicate_one(store, profile, source, expected_target_provider) {
+        match replicate_one(
+            store,
+            profile,
+            source,
+            expected_target_provider,
+            item,
+            progress,
+        ) {
             Ok((mut result, warning, mapping)) => {
                 if migrate_sources {
+                    progress.stage(item, ReplicationProgressPhase::DeletingSource);
                     match finalize_migration(
                         store,
                         profile,
@@ -1164,27 +1384,56 @@ fn execute_inner(
                         Ok(()) => {
                             result.status = "migrated".into();
                             result.message = "已迁移到当前供应商并永久删除来源会话".into();
+                            progress.finish_item(
+                                item,
+                                ReplicationProgressItemStatus::Completed,
+                                result.message.clone(),
+                            );
                             created.push(result);
                         }
-                        Err(message) => failed.push(ReplicaResultItem {
-                            source_thread_id: result.source_thread_id,
-                            replica_thread_id: result.replica_thread_id,
-                            title: result.title,
-                            status: "failed".into(),
-                            message,
-                        }),
+                        Err(message) => {
+                            let failed_result = ReplicaResultItem {
+                                source_thread_id: result.source_thread_id,
+                                replica_thread_id: result.replica_thread_id,
+                                title: result.title,
+                                status: "failed".into(),
+                                message,
+                            };
+                            progress.finish_item(
+                                item,
+                                ReplicationProgressItemStatus::Failed,
+                                failed_result.message.clone(),
+                            );
+                            failed.push(failed_result);
+                        }
                     }
                 } else {
+                    progress.finish_item(
+                        item,
+                        ReplicationProgressItemStatus::Completed,
+                        result.message.clone(),
+                    );
                     created.push(result);
                 }
                 if let Some(warning) = warning {
                     warnings.push(warning);
                 }
             }
-            Err(result) => failed.push(result),
+            Err(result) => {
+                progress.finish_item(
+                    item,
+                    ReplicationProgressItemStatus::Failed,
+                    result.message.clone(),
+                );
+                failed.push(result);
+            }
         }
     }
 
+    progress.batch_stage(
+        ReplicationProgressPhase::Finishing,
+        Some("正在完成会话索引与客户端状态处理".into()),
+    );
     FileExt::unlock(&lock)?;
     let client_restarted = match restart_guard.finish() {
         Ok(value) => value,
@@ -1209,6 +1458,8 @@ fn replicate_one(
     profile: &Profile,
     source: &ThreadSnapshot,
     target_provider: &str,
+    item: &ReplicationPlanItem,
+    progress: &ReplicationProgressTracker<'_>,
 ) -> Result<(ReplicaResultItem, Option<String>, ReplicaMapping), ReplicaResultItem> {
     let mut fork_client =
         match AppServerClient::start(&profile.home_path(), profile.app_path.as_deref()) {
@@ -1218,6 +1469,7 @@ fn replicate_one(
     if let Err(error) = fork_client.thread_read(&source.thread_id, true) {
         return Err(snapshot_failed_item(source, None, &error.to_string()));
     }
+    progress.stage(item, ReplicationProgressPhase::CreatingReplica);
     let replica_thread_id = match fork_client.thread_fork(&source.thread_id) {
         Ok(thread_id) if thread_id != source.thread_id => thread_id,
         Ok(_) => {
@@ -1230,8 +1482,10 @@ fn replicate_one(
         Err(error) => return Err(snapshot_failed_item(source, None, &error.to_string())),
     };
     let prepared = (|| {
+        progress.stage(item, ReplicationProgressPhase::WaitingForRollout);
         let replica = wait_for_snapshot(profile, &replica_thread_id)?;
         validate_replica_path(&profile.home_path(), &replica.rollout_path)?;
+        progress.stage(item, ReplicationProgressPhase::UpdatingProvider);
         if replica.provider_id.as_deref() != Some(target_provider) {
             rewrite_replica_provider(
                 &profile.home_path(),
@@ -1240,6 +1494,7 @@ fn replicate_one(
                 target_provider,
             )?;
         }
+        progress.stage(item, ReplicationProgressPhase::RestoringTitle);
         let title_warning = if source.title != source.thread_id {
             fork_client
                 .thread_name_set(&replica_thread_id, &source.title)
@@ -1267,6 +1522,7 @@ fn replicate_one(
     };
     drop(fork_client);
 
+    progress.stage(item, ReplicationProgressPhase::VerifyingReplica);
     let verified = verify_replica(profile, source, target_provider, &replica_thread_id);
     let replica = match verified {
         Ok(replica) => replica,
@@ -1300,6 +1556,7 @@ fn replicate_one(
         verified_at: Some(Utc::now().to_rfc3339()),
         deleted_at: None,
     };
+    progress.stage(item, ReplicationProgressPhase::SavingMapping);
     if let Err(error) = store.save_replica(&mapping) {
         let cleanup = cleanup_replica(profile, &replica_thread_id);
         let message = cleanup_message(&format!("映射记录失败：{error}"), cleanup);
@@ -1995,6 +2252,8 @@ fn replace_file(temp: &Path, path: &Path) -> AppResult<()> {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::RefCell;
+
     use super::*;
     use crate::models::ProfileKind;
 
@@ -2007,6 +2266,9 @@ mod tests {
             provider_id: provider.into(),
             app_path: None,
             discovery_source: "test".into(),
+            discovery_state: "active".into(),
+            last_seen_at: Some(Utc::now().to_rfc3339()),
+            unavailable_reason: None,
             providers: Vec::new(),
             config_profiles: Vec::new(),
             created_at: Utc::now().to_rfc3339(),
@@ -2040,6 +2302,66 @@ mod tests {
         )
         .unwrap();
         path
+    }
+
+    #[test]
+    fn progress_tracker_reports_serial_item_stages_and_counts() {
+        let events = RefCell::new(Vec::<ReplicationProgress>::new());
+        let report = |progress| events.borrow_mut().push(progress);
+        let mut tracker = ReplicationProgressTracker::new(
+            "request",
+            "job",
+            ReplicationProgressOperation::Replication,
+            2,
+            &report,
+        );
+        let first = ReplicationPlanItem {
+            thread_id: "first".into(),
+            title: "First".into(),
+            source_provider_id: "source".into(),
+            action: ReplicationAction::CreateReplica,
+            reason: "create".into(),
+            source_sha256: "sha".into(),
+            replica_thread_id: None,
+            size_bytes: 1,
+        };
+        let second = ReplicationPlanItem {
+            thread_id: "second".into(),
+            title: "Second".into(),
+            source_provider_id: "source".into(),
+            action: ReplicationAction::SkipAlreadyReplicated,
+            reason: "skip".into(),
+            source_sha256: "sha".into(),
+            replica_thread_id: Some("existing".into()),
+            size_bytes: 1,
+        };
+
+        tracker.stage(&first, ReplicationProgressPhase::ReadingSource);
+        tracker.stage(&first, ReplicationProgressPhase::VerifyingReplica);
+        tracker.finish_item(
+            &first,
+            ReplicationProgressItemStatus::Completed,
+            "done".into(),
+        );
+        tracker.finish_item(
+            &second,
+            ReplicationProgressItemStatus::Skipped,
+            "skipped".into(),
+        );
+        tracker.finish_batch(ReplicationProgressStatus::Completed, None);
+
+        let events = events.borrow();
+        assert_eq!(events[0].current_thread_id.as_deref(), Some("first"));
+        assert_eq!(events[0].phase, ReplicationProgressPhase::ReadingSource);
+        assert_eq!(events[1].phase, ReplicationProgressPhase::VerifyingReplica);
+        assert_eq!(events[2].completed, 1);
+        assert_eq!(events[2].created, 1);
+        assert_eq!(events[2].percent, 50);
+        assert_eq!(events[3].completed, 2);
+        assert_eq!(events[3].skipped, 1);
+        assert_eq!(events[3].percent, 100);
+        assert_eq!(events[4].status, ReplicationProgressStatus::Completed);
+        assert_eq!(events[4].percent, 100);
     }
 
     #[test]

@@ -622,7 +622,7 @@ fn finish_transaction(store: &Store, transaction: &ProviderSwitchTransactionRow)
 
 pub fn poll_official_snapshots(data_dir: &Path) -> AppResult<()> {
     let store = Store::open(data_dir)?;
-    for profile in store.list_profiles()? {
+    for profile in store.list_active_profiles()? {
         let Ok(_lock) = acquire_home_lock(data_dir, &profile.id) else {
             continue;
         };
@@ -708,7 +708,7 @@ fn refresh_watched_homes(
 ) -> AppResult<()> {
     let store = Store::open(data_dir)?;
     let next_profiles = store
-        .list_profiles()?
+        .list_active_profiles()?
         .into_iter()
         .map(|profile| (normalized_path(&profile.home_path()), profile))
         .collect::<HashMap<_, _>>();
@@ -1448,6 +1448,9 @@ mod tests {
             provider_id: provider_id.into(),
             app_path: None,
             discovery_source: "test".into(),
+            discovery_state: "active".into(),
+            last_seen_at: Some(timestamp.clone()),
+            unavailable_reason: None,
             providers: vec![],
             config_profiles: vec![],
             created_at: timestamp.clone(),
@@ -1662,6 +1665,9 @@ mod tests {
                 provider_id: "openai".into(),
                 app_path: None,
                 discovery_source: "test".into(),
+                discovery_state: "active".into(),
+                last_seen_at: Some(timestamp.clone()),
+                unavailable_reason: None,
                 providers: vec![],
                 config_profiles: vec![],
                 created_at: timestamp.clone(),

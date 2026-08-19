@@ -11,15 +11,19 @@ mod sessions;
 mod store;
 
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use tauri::Manager;
+use chrono::Utc;
+
+use tauri::{Emitter, Manager};
 
 use models::{
     AppState, ArchiveCleanupPreview, ArchiveCleanupResult, DiscoveryReport, ProviderConfigInput,
     ProviderConfigTemplate, ProviderConfigView, ProviderSwitchResult, ProviderWorkspaceSnapshot,
-    ReplicaMapping, ReplicationPreview, ReplicationResult, SessionRecord, UpdateSyncPreview,
+    ReplicaMapping, ReplicationPreview, ReplicationProgress, ReplicationResult, SessionRecord,
+    UpdateSyncPreview,
 };
 use store::Store;
 
@@ -39,7 +43,7 @@ fn lock_store(context: &AppContext) -> Result<std::sync::MutexGuard<'_, Store>, 
 #[tauri::command]
 fn get_app_state(context: tauri::State<'_, AppContext>) -> Result<AppState, String> {
     let profiles = lock_store(&context)?
-        .list_profiles()
+        .list_active_profiles()
         .map_err(String::from)?;
     let app_server_path = profiles
         .iter()
@@ -134,7 +138,7 @@ fn scan_sessions(
             })
             .map_err(String::from);
     }
-    let profiles = store.list_profiles().map_err(String::from)?;
+    let profiles = store.list_active_profiles().map_err(String::from)?;
     sessions::aggregate_sessions(&profiles).map_err(String::from)
 }
 
@@ -288,21 +292,28 @@ async fn replication_preview(
 
 #[tauri::command]
 async fn replication_execute(
+    app: tauri::AppHandle,
     context: tauri::State<'_, AppContext>,
     profile_id: String,
     source_thread_ids: Vec<String>,
     force_close_client: bool,
+    request_id: String,
 ) -> Result<ReplicationResult, String> {
     let data_dir = context.data_dir.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let store = Store::open(&data_dir).map_err(String::from)?;
         let profile = store.get_profile(&profile_id).map_err(String::from)?;
+        let report = |progress: ReplicationProgress| {
+            let _ = app.emit("replication-progress", progress);
+        };
         replication::execute(
             &data_dir,
             &store,
             &profile,
             &source_thread_ids,
             force_close_client,
+            &request_id,
+            &report,
         )
         .map_err(String::from)
     })
@@ -312,21 +323,28 @@ async fn replication_execute(
 
 #[tauri::command]
 async fn replication_migrate(
+    app: tauri::AppHandle,
     context: tauri::State<'_, AppContext>,
     profile_id: String,
     source_thread_ids: Vec<String>,
     force_close_client: bool,
+    request_id: String,
 ) -> Result<ReplicationResult, String> {
     let data_dir = context.data_dir.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let store = Store::open(&data_dir).map_err(String::from)?;
         let profile = store.get_profile(&profile_id).map_err(String::from)?;
+        let report = |progress: ReplicationProgress| {
+            let _ = app.emit("replication-progress", progress);
+        };
         replication::migrate(
             &data_dir,
             &store,
             &profile,
             &source_thread_ids,
             force_close_client,
+            &request_id,
+            &report,
         )
         .map_err(String::from)
     })
@@ -432,8 +450,13 @@ fn discover_and_register(
         .collect::<std::collections::HashMap<_, _>>();
     let mut added_count = 0;
     let mut refreshed_count = 0;
+    let mut removed_count = 0;
+    let mut unavailable_count = 0;
+    let mut seen_paths = HashSet::new();
+    let checked_at = Utc::now().to_rfc3339();
     for instance in scan.instances {
         let key = discovery::normalized_path_key(&instance.home);
+        seen_paths.insert(key.clone());
         if let Some(existing) = by_path.get(&key) {
             let mut refreshed = profiles::from_discovery(instance);
             refreshed.id = existing.id.clone();
@@ -478,13 +501,63 @@ fn discover_and_register(
             added_count += 1;
         }
     }
+
+    for profile in &current {
+        let key = discovery::normalized_path_key(&profile.home_path());
+        if seen_paths.contains(&key) {
+            continue;
+        }
+        match discovery::validate_codex_home(&profile.home_path()) {
+            discovery::CodexHomeStatus::Unavailable => {
+                store
+                    .mark_profile_unavailable(&profile.id, "目录不存在或当前无法访问", &checked_at)
+                    .map_err(String::from)?;
+                unavailable_count += 1;
+            }
+            discovery::CodexHomeStatus::Invalid => {
+                if let Some(snapshot_path) = store
+                    .remove_profile_index(&profile.id)
+                    .map_err(String::from)?
+                {
+                    remove_owned_snapshot(data_dir, Path::new(&snapshot_path));
+                }
+                removed_count += 1;
+            }
+            discovery::CodexHomeStatus::Valid => {
+                // A valid registered path should normally be returned by the
+                // candidate scan. Keep it active if a source was temporarily
+                // unavailable during the scan.
+                let mut restored = profile.clone();
+                restored.discovery_state = "active".into();
+                restored.last_seen_at = Some(checked_at.clone());
+                restored.unavailable_reason = None;
+                store
+                    .refresh_discovered_profile(&restored)
+                    .map_err(String::from)?;
+                refreshed_count += 1;
+            }
+        }
+    }
     Ok(DiscoveryReport {
         candidates_scanned: scan.candidates_scanned,
         discovered_count,
         added_count,
         refreshed_count,
-        profiles: store.list_profiles().map_err(String::from)?,
+        removed_count,
+        unavailable_count,
+        profiles: store.list_active_profiles().map_err(String::from)?,
     })
+}
+
+fn remove_owned_snapshot(data_dir: &Path, snapshot_path: &Path) {
+    let snapshot_root = data_dir.join("auth-snapshots");
+    if !snapshot_path.starts_with(&snapshot_root) {
+        return;
+    }
+    let _ = fs::remove_file(snapshot_path);
+    if let Some(parent) = snapshot_path.parent() {
+        let _ = fs::remove_dir(parent);
+    }
 }
 
 pub fn run() {

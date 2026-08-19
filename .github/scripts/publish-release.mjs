@@ -18,9 +18,19 @@ const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "
 const assetsRoot = path.resolve(assetsArgument);
 const packageJson = JSON.parse(await readFile(path.join(projectRoot, "package.json"), "utf8"));
 const version = packageJson.version;
+const releaseHighlightsByVersion = new Map([
+  [
+    "0.1.102",
+    `- 收紧 Codex 存储位置识别规则，不再把仅包含 sessions 等通用目录结构的 Claude 或普通目录识别为 Codex 存储位置。
+- 重新发现时校验本地索引：明确无效的记录只从工具索引中清理，暂时不存在或无法访问的位置会保留为暂不可用，不删除用户目录或会话文件。
+- 复制和迁移会话增加逐条进度、当前处理阶段以及成功、跳过、失败状态。
+- 顶部资源区增加使用教程入口，并调整 QQ 交流群入口的图标与位置。`,
+  ],
+]);
 if (tag !== `v${version}`) {
   throw new Error(`tag ${tag} does not match package version ${version}`);
 }
+const releaseHighlights = releaseHighlightsByVersion.get(version) ?? "本版本包含稳定性和兼容性改进。";
 
 const labels = new Map([
   [`711EV-Codex-Tool-${version}-Windows-portable.exe`, `Windows 便携版（版本 ${version}，Windows x64）`],
@@ -42,7 +52,13 @@ if (JSON.stringify(files) !== JSON.stringify(expected)) {
   );
 }
 const assetPaths = files.map((name) => path.join(assetsRoot, name));
-const notes = `本版本提供以下下载文件：
+const notes = `## 本次更新
+
+${releaseHighlights}
+
+## 下载说明
+
+本版本提供以下下载文件：
 
 - Windows 便携版：无需安装，下载后可直接运行。
 - Windows 安装包：支持选择安装目录并创建桌面快捷方式。

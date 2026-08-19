@@ -36,6 +36,9 @@ pub struct Profile {
     pub provider_id: String,
     pub app_path: Option<String>,
     pub discovery_source: String,
+    pub discovery_state: String,
+    pub last_seen_at: Option<String>,
+    pub unavailable_reason: Option<String>,
     pub providers: Vec<DiscoveredProvider>,
     pub config_profiles: Vec<DiscoveredConfigProfile>,
     pub created_at: String,
@@ -118,6 +121,8 @@ pub struct DiscoveryReport {
     pub discovered_count: usize,
     pub added_count: usize,
     pub refreshed_count: usize,
+    pub removed_count: usize,
+    pub unavailable_count: usize,
     pub profiles: Vec<Profile>,
 }
 
@@ -303,6 +308,68 @@ pub struct ReplicationResult {
     pub failed: Vec<ReplicaResultItem>,
     pub client_restarted: bool,
     pub warning: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ReplicationProgressOperation {
+    Replication,
+    Migration,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ReplicationProgressStatus {
+    Running,
+    Completed,
+    Failed,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ReplicationProgressPhase {
+    Preparing,
+    ReadingSource,
+    CreatingReplica,
+    WaitingForRollout,
+    UpdatingProvider,
+    RestoringTitle,
+    VerifyingReplica,
+    SavingMapping,
+    DeletingSource,
+    Finishing,
+    Completed,
+    Skipped,
+    Failed,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ReplicationProgressItemStatus {
+    Processing,
+    Completed,
+    Skipped,
+    Failed,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReplicationProgress {
+    pub request_id: String,
+    pub job_id: String,
+    pub operation: ReplicationProgressOperation,
+    pub status: ReplicationProgressStatus,
+    pub phase: ReplicationProgressPhase,
+    pub total: usize,
+    pub completed: usize,
+    pub created: usize,
+    pub skipped: usize,
+    pub failed: usize,
+    pub percent: usize,
+    pub current_thread_id: Option<String>,
+    pub current_title: Option<String>,
+    pub item_status: Option<ReplicationProgressItemStatus>,
+    pub message: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]

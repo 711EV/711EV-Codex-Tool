@@ -1,4 +1,5 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
   AppState,
   ArchiveCleanupPreview,
@@ -16,6 +17,7 @@ import type {
   ProviderWorkspaceSnapshot,
   ReplicaMapping,
   ReplicationPreview,
+  ReplicationProgress,
   ReplicationResult,
   SessionRecord,
   UpdateSyncPreview,
@@ -31,6 +33,9 @@ const demoProfiles: Profile[] = [
     providerId: "custom",
     appPath: null,
     discoverySource: "Codex 默认目录",
+    discoveryState: "active",
+    lastSeenAt: now,
+    unavailableReason: null,
     providers: [
       { id: "OpenAI-API", sourceFile: "~/.codex/config.toml", active: false },
       { id: "SHUAI-API", sourceFile: "~/.codex/config.toml", active: false },
@@ -48,6 +53,9 @@ const demoProfiles: Profile[] = [
     providerId: "relay",
     appPath: null,
     discoverySource: "已发现的存储位置",
+    discoveryState: "active",
+    lastSeenAt: now,
+    unavailableReason: null,
     providers: [
       { id: "openai", sourceFile: "~/.codex-development/config.toml", active: false },
       { id: "relay", sourceFile: "~/.codex-development/config.toml", active: true },
@@ -192,6 +200,15 @@ const demoProviderSessions: ProviderSessionRecord[] = [
 ];
 
 export const backend = {
+  async onReplicationProgress(
+    handler: (progress: ReplicationProgress) => void,
+  ): Promise<UnlistenFn> {
+    if (!isTauri()) return () => {};
+    return listen<ReplicationProgress>("replication-progress", (event) => {
+      handler(event.payload);
+    });
+  },
+
   async getAppState(): Promise<AppState> {
     if (!isTauri()) {
       return {
@@ -211,6 +228,8 @@ export const backend = {
         discoveredCount: demoProfiles.length,
         addedCount: 0,
         refreshedCount: demoProfiles.length,
+        removedCount: 0,
+        unavailableCount: 0,
         profiles: demoProfiles,
       };
     }
@@ -479,6 +498,7 @@ export const backend = {
   async replicationExecute(
     profileId: string,
     sourceThreadIds: string[],
+    requestId: string,
     forceCloseClient = false,
   ): Promise<ReplicationResult> {
     if (!isTauri()) {
@@ -504,6 +524,7 @@ export const backend = {
     return invoke<ReplicationResult>("replication_execute", {
       profileId,
       sourceThreadIds,
+      requestId,
       forceCloseClient,
     });
   },
@@ -511,6 +532,7 @@ export const backend = {
   async replicationMigrate(
     profileId: string,
     sourceThreadIds: string[],
+    requestId: string,
     forceCloseClient = false,
   ): Promise<ReplicationResult> {
     if (!isTauri()) {
@@ -536,6 +558,7 @@ export const backend = {
     return invoke<ReplicationResult>("replication_migrate", {
       profileId,
       sourceThreadIds,
+      requestId,
       forceCloseClient,
     });
   },

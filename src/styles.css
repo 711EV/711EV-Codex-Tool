@@ -400,6 +400,10 @@ input:focus-visible {
   fill: none;
 }
 
+.top-menu-link .qq-logo {
+  fill: currentColor;
+}
+
 .top-menu-link:hover {
   color: var(--accent);
   background: var(--accent-soft);
@@ -2297,6 +2301,112 @@ select:focus,
   text-align: right;
 }
 
+.progress-item-badge {
+  min-width: 58px;
+  justify-content: center;
+  gap: 4px;
+}
+
+.action-badge.progress-waiting,
+.action-badge.progress-skipped {
+  color: var(--text-tertiary);
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.action-badge.progress-processing {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.action-badge.progress-completed {
+  color: var(--success);
+  background: var(--success-soft);
+}
+
+.action-badge.progress-failed {
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+
+.replication-progress {
+  display: grid;
+  gap: 8px;
+  padding: 12px 18px;
+  background: rgba(255, 255, 255, 0.035);
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+
+.replication-progress-heading,
+.replication-progress-counts {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.replication-progress-heading {
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.replication-progress-heading strong {
+  color: var(--accent);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.replication-progress-track {
+  height: 6px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.09);
+  border-radius: 3px;
+}
+
+.replication-progress-track > span {
+  display: block;
+  min-width: 0;
+  height: 100%;
+  background: var(--accent);
+  border-radius: inherit;
+  box-shadow: 0 0 10px rgba(238, 133, 188, 0.28);
+  transition: width 180ms ease;
+}
+
+.replication-progress > small {
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.replication-progress-counts {
+  justify-content: flex-start;
+  gap: 16px;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.replication-progress.status-failed .replication-progress-heading strong {
+  color: var(--danger);
+}
+
+.replication-progress.status-failed .replication-progress-track > span {
+  background: var(--danger);
+  box-shadow: none;
+}
+
+.migration-progress:not(.status-failed) .replication-progress-heading strong {
+  color: var(--danger);
+}
+
+.migration-progress:not(.status-failed) .replication-progress-track > span {
+  background: var(--danger);
+  box-shadow: 0 0 10px rgba(248, 113, 113, 0.24);
+}
+
 .action-badge.copy,
 .action-badge.update,
 .action-badge.eligible,
@@ -2603,6 +2713,10 @@ select:focus,
     width: 100%;
     animation: none;
   }
+
+  .replication-progress-track > span {
+    transition: none;
+  }
 }
 
 @media (max-width: 1120px) {
@@ -2771,7 +2885,7 @@ select:focus,
   }
 
   .preview-row {
-    grid-template-columns: 56px minmax(0, 1fr);
+    grid-template-columns: 68px minmax(0, 1fr);
   }
 
   .preview-row > span:last-child {

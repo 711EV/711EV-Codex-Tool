@@ -30,6 +30,7 @@ import DesktopTitlebar from "./components/DesktopTitlebar.vue";
 import OpenAILogo from "./components/OpenAILogo.vue";
 import TopMenuBar from "./components/TopMenuBar.vue";
 import { appUpdater } from "./services/appUpdater";
+import { backend } from "./services/backend";
 import { useWorkspaceStore } from "./stores/workspace";
 import type {
   ApplicationUpdate,
@@ -37,6 +38,10 @@ import type {
   InvalidChildCleanupPreview,
   ReplicationAction,
   ReplicationEligibility,
+  ReplicationProgress,
+  ReplicationProgressItemStatus,
+  ReplicationProgressOperation,
+  ReplicationProgressPhase,
   ReplicationPreview,
   ProviderSessionRecord,
   ProviderConfigInput,
@@ -54,6 +59,10 @@ const preview = ref<ReplicationPreview | null>(null);
 const previewLoading = ref(false);
 const migrationPreview = ref<ReplicationPreview | null>(null);
 const migrationPreviewLoading = ref(false);
+const replicationProgress = ref<ReplicationProgress | null>(null);
+const activeProgressRequestId = ref<string | null>(null);
+const activeProgressOperation = ref<ReplicationProgressOperation | null>(null);
+const replicationItemProgress = ref<Record<string, ReplicationItemProgressState>>({});
 const updateSyncPreview = ref<UpdateSyncPreview | null>(null);
 const updateSyncPreviewLoading = ref(false);
 const updateSyncResult = ref<Awaited<ReturnType<typeof workspace.syncUpdatedSessions>> | null>(null);
@@ -93,7 +102,15 @@ const pendingForceOperation = ref<
 >(null);
 const notice = ref<string | null>(null);
 let noticeDismissTimer: number | undefined;
+let unlistenReplicationProgress: (() => void) | null = null;
+let appMounted = false;
 const expandedSessionGroups = ref<string[]>([]);
+type ReplicationItemDisplayStatus = "waiting" | ReplicationProgressItemStatus;
+interface ReplicationItemProgressState {
+  status: ReplicationItemDisplayStatus;
+  phase: ReplicationProgressPhase | null;
+  message: string | null;
+}
 const canPreview = computed(
   () =>
     Boolean(workspace.activeProfileId) &&
@@ -118,6 +135,9 @@ const paneActionBusy = computed(
     updateSyncPreviewLoading.value ||
     archiveCleanupPreviewLoading.value ||
     childCleanupPreviewLoading.value,
+);
+const replicationOperationRunning = computed(
+  () => workspace.syncing || workspace.migrating,
 );
 const sessionGroups = computed(() => {
   const sessions = workspace.providerSessions;
@@ -155,7 +175,15 @@ const sessionGroups = computed(() => {
 });
 
 onMounted(async () => {
+  appMounted = true;
   window.addEventListener("keydown", handleModalKeydown);
+  try {
+    const unlisten = await backend.onReplicationProgress(handleReplicationProgress);
+    if (appMounted) unlistenReplicationProgress = unlisten;
+    else unlisten();
+  } catch (reason) {
+    notice.value = `进度监听初始化失败：${reason instanceof Error ? reason.message : String(reason)}`;
+  }
   await workspace.initialize();
   if (import.meta.env.PROD) {
     void checkApplicationUpdate(true);
@@ -163,7 +191,10 @@ onMounted(async () => {
 });
 
 onUnmounted(() => {
+  appMounted = false;
   window.removeEventListener("keydown", handleModalKeydown);
+  unlistenReplicationProgress?.();
+  unlistenReplicationProgress = null;
   if (noticeDismissTimer !== undefined) window.clearTimeout(noticeDismissTimer);
 });
 
@@ -204,7 +235,7 @@ function handleModalKeydown(event: KeyboardEvent) {
   } else if (migrationPreview.value) {
     closeMigrationPreview();
   } else if (preview.value) {
-    preview.value = null;
+    closeReplicationPreview();
   } else {
     return;
   }
@@ -304,6 +335,145 @@ function actionLabel(action: ReplicationAction) {
   }[action];
 }
 
+function progressPhaseLabel(phase: ReplicationProgressPhase | null) {
+  if (!phase) return "等待处理";
+  return {
+    preparing: "正在准备执行环境",
+    reading_source: "正在读取来源会话",
+    creating_replica: "正在创建副本",
+    waiting_for_rollout: "正在等待副本文件生成",
+    updating_provider: "正在更新目标供应商",
+    restoring_title: "正在恢复会话标题",
+    verifying_replica: "正在校验副本",
+    saving_mapping: "正在保存复制关系",
+    deleting_source: "正在删除来源会话",
+    finishing: "正在完成会话索引与客户端状态处理",
+    completed: "已完成",
+    skipped: "已跳过",
+    failed: "处理失败",
+  }[phase];
+}
+
+function itemProgressLabel(threadId: string) {
+  return {
+    waiting: "等待中",
+    processing: "处理中",
+    completed: "已完成",
+    skipped: "已跳过",
+    failed: "失败",
+  }[replicationItemProgress.value[threadId]?.status ?? "waiting"];
+}
+
+function itemProgressClass(threadId: string) {
+  return `progress-${replicationItemProgress.value[threadId]?.status ?? "waiting"}`;
+}
+
+function itemIsProcessing(threadId: string) {
+  return replicationItemProgress.value[threadId]?.status === "processing";
+}
+
+function itemProgressDetail(item: ReplicationPreview["items"][number]) {
+  const progress = replicationItemProgress.value[item.threadId];
+  if (!progress) return item.reason;
+  if (progress.status === "processing") return progressPhaseLabel(progress.phase);
+  return progress.message ?? progressPhaseLabel(progress.phase);
+}
+
+function currentProgressDetail() {
+  const progress = replicationProgress.value;
+  if (!progress) return "正在等待后端进度";
+  const phase = progressPhaseLabel(progress.phase);
+  return progress.currentTitle ? `当前：${progress.currentTitle} · ${phase}` : progress.message ?? phase;
+}
+
+function createProgressRequestId() {
+  return globalThis.crypto?.randomUUID?.()
+    ?? `replication-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function beginReplicationProgress(
+  operation: ReplicationProgressOperation,
+  operationPreview: ReplicationPreview,
+) {
+  const requestId = createProgressRequestId();
+  activeProgressRequestId.value = requestId;
+  activeProgressOperation.value = operation;
+  replicationProgress.value = {
+    requestId,
+    jobId: "",
+    operation,
+    status: "running",
+    phase: "preparing",
+    total: operationPreview.items.length,
+    completed: 0,
+    created: 0,
+    skipped: 0,
+    failed: 0,
+    percent: 0,
+    currentThreadId: null,
+    currentTitle: null,
+    itemStatus: null,
+    message: "正在准备执行环境",
+  };
+  replicationItemProgress.value = Object.fromEntries(
+    operationPreview.items.map((item) => [
+      item.threadId,
+      { status: "waiting", phase: null, message: null } satisfies ReplicationItemProgressState,
+    ]),
+  );
+  return requestId;
+}
+
+function handleReplicationProgress(progress: ReplicationProgress) {
+  if (
+    progress.requestId !== activeProgressRequestId.value
+    || progress.operation !== activeProgressOperation.value
+  ) return;
+
+  replicationProgress.value = progress;
+  if (progress.currentThreadId && progress.itemStatus) {
+    replicationItemProgress.value = {
+      ...replicationItemProgress.value,
+      [progress.currentThreadId]: {
+        status: progress.itemStatus,
+        phase: progress.phase,
+        message: progress.message,
+      },
+    };
+  }
+  if (progress.status === "failed") {
+    replicationItemProgress.value = Object.fromEntries(
+      Object.entries(replicationItemProgress.value).map(([threadId, item]) => [
+        threadId,
+        item.status === "processing"
+          ? { status: "failed", phase: "failed", message: progress.message }
+          : item,
+      ]),
+    );
+  }
+}
+
+function markReplicationProgressFailed(message: string) {
+  const progress = replicationProgress.value;
+  if (!progress) return;
+  handleReplicationProgress({
+    ...progress,
+    status: "failed",
+    phase: "failed",
+    currentThreadId: null,
+    currentTitle: null,
+    itemStatus: null,
+    message,
+  });
+}
+
+function clearReplicationProgress() {
+  replicationProgress.value = null;
+  activeProgressRequestId.value = null;
+  activeProgressOperation.value = null;
+  replicationItemProgress.value = {};
+}
+
 function updateSyncActionLabel(action: UpdateSyncAction) {
   return {
     source_updated: "来源已更新",
@@ -334,10 +504,19 @@ async function openPreview() {
   }
 }
 
+function closeReplicationPreview() {
+  if (workspace.syncing) return;
+  preview.value = null;
+  clearReplicationProgress();
+}
+
 async function runReplication(force = false) {
+  if (!preview.value) return;
+  const requestId = beginReplicationProgress("replication", preview.value);
   try {
-    const result = await workspace.executeReplication(force);
+    const result = await workspace.executeReplication(requestId, force);
     preview.value = null;
+    clearReplicationProgress();
     forceClosePrompt.value = false;
     pendingForceOperation.value = null;
     const summary = result.warning
@@ -354,10 +533,12 @@ async function runReplication(force = false) {
   } catch (reason) {
     const message = reason instanceof Error ? reason.message : String(reason);
     if (!force && message.includes("confirm force close and retry")) {
+      clearReplicationProgress();
       pendingForceOperation.value = "replication";
       forceClosePrompt.value = true;
       return;
     }
+    markReplicationProgressFailed(message);
     notice.value = message;
   }
 }
@@ -376,12 +557,16 @@ async function openMigrationPreview() {
 function closeMigrationPreview() {
   if (workspace.migrating) return;
   migrationPreview.value = null;
+  clearReplicationProgress();
 }
 
 async function runMigration(force = false) {
+  if (!migrationPreview.value) return;
+  const requestId = beginReplicationProgress("migration", migrationPreview.value);
   try {
-    const result = await workspace.executeMigration(force);
+    const result = await workspace.executeMigration(requestId, force);
     migrationPreview.value = null;
+    clearReplicationProgress();
     forceClosePrompt.value = false;
     pendingForceOperation.value = null;
     const summary = `迁移完成：已迁移 ${result.created.length} 条，跳过 ${result.skipped.length} 条，失败 ${result.failed.length} 条`;
@@ -401,10 +586,12 @@ async function runMigration(force = false) {
   } catch (reason) {
     const message = reason instanceof Error ? reason.message : String(reason);
     if (!force && message.includes("confirm force close and retry")) {
+      clearReplicationProgress();
       pendingForceOperation.value = "migration";
       forceClosePrompt.value = true;
       return;
     }
+    markReplicationProgressFailed(message);
     notice.value = message;
   }
 }
@@ -677,7 +864,11 @@ async function saveProviderConfigDialog() {
 }
 
 async function requestProviderSwitch(providerId: string) {
-  if (providerId === workspace.currentProviderId || workspace.providerConfigSwitching) return;
+  if (
+    providerId === workspace.currentProviderId
+    || workspace.providerConfigSwitching
+    || replicationOperationRunning.value
+  ) return;
   if (workspace.selectedProviderId !== providerId) {
     await workspace.selectProvider(providerId);
   }
@@ -850,9 +1041,9 @@ async function installApplicationUpdate() {
           }"
           role="button"
           tabindex="0"
-          :aria-disabled="workspace.providerSwitching"
-          @click="!workspace.providerSwitching && workspace.selectProvider(provider.providerId)"
-          @keydown.enter="!workspace.providerSwitching && workspace.selectProvider(provider.providerId)"
+          :aria-disabled="workspace.providerSwitching || replicationOperationRunning"
+          @click="!workspace.providerSwitching && !replicationOperationRunning && workspace.selectProvider(provider.providerId)"
+          @keydown.enter="!workspace.providerSwitching && !replicationOperationRunning && workspace.selectProvider(provider.providerId)"
         >
           <span class="profile-icon" :class="{ current: provider.isCurrent }">
             <OpenAILogo v-if="isOfficialProvider(provider.providerId)" :size="17" />
@@ -878,10 +1069,10 @@ async function installApplicationUpdate() {
             <button
               type="button"
               class="provider-switch-button"
-              :class="{ inactive: provider.isCurrent || provider.configured !== true }"
-              :title="provider.isCurrent ? '当前正在使用' : provider.configured === true ? `切换到 ${provider.providerId}` : '请先在右侧完成供应商配置'"
-              :aria-label="provider.isCurrent ? '当前正在使用' : provider.configured === true ? `切换到 ${provider.providerId}` : '请先在右侧完成供应商配置'"
-              :disabled="provider.isCurrent || provider.configured !== true || workspace.providerConfigSwitching"
+              :class="{ inactive: provider.isCurrent || provider.configured !== true || replicationOperationRunning }"
+              :title="replicationOperationRunning ? '复制或迁移进行中' : provider.isCurrent ? '当前正在使用' : provider.configured === true ? `切换到 ${provider.providerId}` : '请先在右侧完成供应商配置'"
+              :aria-label="replicationOperationRunning ? '复制或迁移进行中' : provider.isCurrent ? '当前正在使用' : provider.configured === true ? `切换到 ${provider.providerId}` : '请先在右侧完成供应商配置'"
+              :disabled="provider.isCurrent || provider.configured !== true || workspace.providerConfigSwitching || replicationOperationRunning"
               @click.stop="requestProviderSwitch(provider.providerId)"
             >
               <ArrowRightLeft :size="13" />
@@ -1284,7 +1475,14 @@ async function installApplicationUpdate() {
       <section class="modal preview-modal">
         <div class="modal-heading">
           <div><p class="eyebrow">执行前检查</p><h2>会话副本预览</h2></div>
-          <button class="icon-button" title="关闭" @click="preview = null"><X :size="18" /></button>
+          <button
+            class="icon-button"
+            title="关闭"
+            :disabled="workspace.syncing"
+            @click="closeReplicationPreview"
+          >
+            <X :size="18" />
+          </button>
         </div>
         <div class="preview-stats">
           <div><span>创建副本</span><strong>{{ preview.createCount }}</strong></div>
@@ -1302,18 +1500,55 @@ async function installApplicationUpdate() {
         </div>
         <div class="preview-list">
           <div v-for="item in preview.items" :key="item.threadId" class="preview-row">
-            <span class="action-badge" :class="item.action">{{ actionLabel(item.action) }}</span>
-            <div><strong>{{ item.title }}</strong><small>{{ item.reason }}</small></div>
+            <span
+              class="action-badge progress-item-badge"
+              :class="activeProgressOperation === 'replication' ? itemProgressClass(item.threadId) : item.action"
+            >
+              <LoaderCircle v-if="activeProgressOperation === 'replication' && itemIsProcessing(item.threadId)" :size="12" class="spinning" />
+              {{ activeProgressOperation === 'replication' ? itemProgressLabel(item.threadId) : actionLabel(item.action) }}
+            </span>
+            <div>
+              <strong>{{ item.title }}</strong>
+              <small>{{ activeProgressOperation === 'replication' ? itemProgressDetail(item) : item.reason }}</small>
+            </div>
             <span>{{ formatBytes(item.sizeBytes) }}</span>
+          </div>
+        </div>
+        <div
+          v-if="activeProgressOperation === 'replication' && replicationProgress"
+          class="replication-progress"
+          :class="`status-${replicationProgress.status}`"
+          role="status"
+          aria-live="polite"
+        >
+          <div class="replication-progress-heading">
+            <span>{{ replicationProgress.status === 'failed' ? '复制已停止' : '正在复制' }} {{ replicationProgress.completed }}/{{ replicationProgress.total }}</span>
+            <strong>{{ replicationProgress.percent }}%</strong>
+          </div>
+          <div
+            class="replication-progress-track"
+            role="progressbar"
+            aria-label="复制进度"
+            aria-valuemin="0"
+            aria-valuemax="100"
+            :aria-valuenow="replicationProgress.percent"
+          >
+            <span :style="{ width: `${replicationProgress.percent}%` }" />
+          </div>
+          <small :title="currentProgressDetail()">{{ currentProgressDetail() }}</small>
+          <div class="replication-progress-counts">
+            <span>完成 {{ replicationProgress.created }}</span>
+            <span>跳过 {{ replicationProgress.skipped }}</span>
+            <span>失败 {{ replicationProgress.failed }}</span>
           </div>
         </div>
         <div class="modal-actions">
           <span class="operation-note"><GitFork :size="16" />每条副本使用新的 Thread ID</span>
-          <button class="secondary-button" @click="preview = null">取消</button>
+          <button class="secondary-button" :disabled="workspace.syncing" @click="closeReplicationPreview">取消</button>
           <button class="primary-button" :disabled="workspace.syncing || preview.createCount === 0" @click="runReplication(false)">
             <LoaderCircle v-if="workspace.syncing" :size="17" class="spinning" />
             <Copy v-else :size="17" />
-            创建副本
+            {{ workspace.syncing && replicationProgress ? `复制中 ${replicationProgress.completed}/${replicationProgress.total}` : "创建副本" }}
           </button>
         </div>
       </section>
@@ -1365,9 +1600,46 @@ async function installApplicationUpdate() {
         </div>
         <div class="preview-list">
           <div v-for="item in migrationPreview.items" :key="item.threadId" class="preview-row">
-            <span class="action-badge" :class="item.action">{{ actionLabel(item.action) }}</span>
-            <div><strong>{{ item.title }}</strong><small>{{ item.reason }}</small></div>
+            <span
+              class="action-badge progress-item-badge"
+              :class="activeProgressOperation === 'migration' ? itemProgressClass(item.threadId) : item.action"
+            >
+              <LoaderCircle v-if="activeProgressOperation === 'migration' && itemIsProcessing(item.threadId)" :size="12" class="spinning" />
+              {{ activeProgressOperation === 'migration' ? itemProgressLabel(item.threadId) : actionLabel(item.action) }}
+            </span>
+            <div>
+              <strong>{{ item.title }}</strong>
+              <small>{{ activeProgressOperation === 'migration' ? itemProgressDetail(item) : item.reason }}</small>
+            </div>
             <span>{{ formatBytes(item.sizeBytes) }}</span>
+          </div>
+        </div>
+        <div
+          v-if="activeProgressOperation === 'migration' && replicationProgress"
+          class="replication-progress migration-progress"
+          :class="`status-${replicationProgress.status}`"
+          role="status"
+          aria-live="polite"
+        >
+          <div class="replication-progress-heading">
+            <span>{{ replicationProgress.status === 'failed' ? '迁移已停止' : '正在迁移' }} {{ replicationProgress.completed }}/{{ replicationProgress.total }}</span>
+            <strong>{{ replicationProgress.percent }}%</strong>
+          </div>
+          <div
+            class="replication-progress-track"
+            role="progressbar"
+            aria-label="迁移进度"
+            aria-valuemin="0"
+            aria-valuemax="100"
+            :aria-valuenow="replicationProgress.percent"
+          >
+            <span :style="{ width: `${replicationProgress.percent}%` }" />
+          </div>
+          <small :title="currentProgressDetail()">{{ currentProgressDetail() }}</small>
+          <div class="replication-progress-counts">
+            <span>完成 {{ replicationProgress.created }}</span>
+            <span>跳过 {{ replicationProgress.skipped }}</span>
+            <span>失败 {{ replicationProgress.failed }}</span>
           </div>
         </div>
         <div class="modal-actions">
@@ -1382,7 +1654,7 @@ async function installApplicationUpdate() {
           >
             <LoaderCircle v-if="workspace.migrating" :size="17" class="spinning" />
             <MoveRight v-else :size="17" />
-            确认迁移 {{ migrationPreview.createCount }} 条
+            {{ workspace.migrating && replicationProgress ? `迁移中 ${replicationProgress.completed}/${replicationProgress.total}` : `确认迁移 ${migrationPreview.createCount} 条` }}
           </button>
         </div>
       </section>

@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use chrono::Utc;
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 
 use crate::error::{AppError, AppResult};
 use crate::models::{
@@ -73,6 +73,9 @@ impl Store {
                 provider_id TEXT NOT NULL,
                 app_path TEXT,
                 discovery_source TEXT NOT NULL DEFAULT '已有实例',
+                discovery_state TEXT NOT NULL DEFAULT 'active',
+                last_seen_at TEXT,
+                unavailable_reason TEXT,
                 providers_json TEXT NOT NULL DEFAULT '[]',
                 config_profiles_json TEXT NOT NULL DEFAULT '[]',
                 created_at TEXT NOT NULL,
@@ -148,6 +151,13 @@ impl Store {
             "discovery_source",
             "TEXT NOT NULL DEFAULT '已有实例'",
         )?;
+        self.add_column_if_missing(
+            "profiles",
+            "discovery_state",
+            "TEXT NOT NULL DEFAULT 'active'",
+        )?;
+        self.add_column_if_missing("profiles", "last_seen_at", "TEXT")?;
+        self.add_column_if_missing("profiles", "unavailable_reason", "TEXT")?;
         self.add_column_if_missing("official_auth_snapshots", "source_modified_at", "TEXT")?;
         self.add_column_if_missing(
             "provider_switch_transactions",
@@ -241,8 +251,20 @@ impl Store {
     pub fn list_profiles(&self) -> AppResult<Vec<Profile>> {
         let mut statement = self.connection.prepare(
             "SELECT id, name, kind, codex_home, provider_id, app_path,
-                    discovery_source, providers_json, config_profiles_json, created_at, updated_at
+                    discovery_source, discovery_state, last_seen_at, unavailable_reason,
+                    providers_json, config_profiles_json, created_at, updated_at
              FROM profiles ORDER BY created_at ASC",
+        )?;
+        let rows = statement.query_map([], row_to_profile)?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(AppError::from)
+    }
+
+    pub fn list_active_profiles(&self) -> AppResult<Vec<Profile>> {
+        let mut statement = self.connection.prepare(
+            "SELECT id, name, kind, codex_home, provider_id, app_path,
+                    discovery_source, discovery_state, last_seen_at, unavailable_reason,
+                    providers_json, config_profiles_json, created_at, updated_at
+             FROM profiles WHERE discovery_state = 'active' ORDER BY created_at ASC",
         )?;
         let rows = statement.query_map([], row_to_profile)?;
         rows.collect::<Result<Vec<_>, _>>().map_err(AppError::from)
@@ -252,7 +274,8 @@ impl Store {
         self.connection
             .query_row(
                 "SELECT id, name, kind, codex_home, provider_id, app_path,
-                        discovery_source, providers_json, config_profiles_json, created_at, updated_at
+                        discovery_source, discovery_state, last_seen_at, unavailable_reason,
+                        providers_json, config_profiles_json, created_at, updated_at
                  FROM profiles WHERE id = ?1",
                 [profile_id],
                 row_to_profile,
@@ -269,8 +292,9 @@ impl Store {
         self.connection.execute(
             "INSERT INTO profiles
              (id, name, kind, codex_home, provider_id, app_path, discovery_source,
-              providers_json, config_profiles_json, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+              discovery_state, last_seen_at, unavailable_reason, providers_json,
+              config_profiles_json, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
             params![
                 profile.id,
                 profile.name,
@@ -279,6 +303,9 @@ impl Store {
                 profile.provider_id,
                 profile.app_path,
                 profile.discovery_source,
+                profile.discovery_state,
+                profile.last_seen_at,
+                profile.unavailable_reason,
                 serde_json::to_string(&profile.providers)?,
                 serde_json::to_string(&profile.config_profiles)?,
                 profile.created_at,
@@ -291,20 +318,71 @@ impl Store {
     pub fn refresh_discovered_profile(&self, profile: &Profile) -> AppResult<()> {
         self.connection.execute(
             "UPDATE profiles SET kind = ?2, provider_id = ?3,
-             app_path = COALESCE(?4, app_path), discovery_source = ?5, providers_json = ?6,
-             config_profiles_json = ?7, updated_at = ?8 WHERE id = ?1",
+             app_path = COALESCE(?4, app_path), discovery_source = ?5,
+             discovery_state = ?6, last_seen_at = ?7, unavailable_reason = ?8,
+             providers_json = ?9, config_profiles_json = ?10, updated_at = ?11 WHERE id = ?1",
             params![
                 profile.id,
                 kind_text(&profile.kind),
                 profile.provider_id,
                 profile.app_path,
                 profile.discovery_source,
+                profile.discovery_state,
+                profile.last_seen_at,
+                profile.unavailable_reason,
                 serde_json::to_string(&profile.providers)?,
                 serde_json::to_string(&profile.config_profiles)?,
                 profile.updated_at,
             ],
         )?;
         Ok(())
+    }
+
+    pub fn mark_profile_unavailable(
+        &self,
+        profile_id: &str,
+        reason: &str,
+        checked_at: &str,
+    ) -> AppResult<()> {
+        self.connection.execute(
+            "UPDATE profiles SET discovery_state = 'unavailable',
+             last_seen_at = last_seen_at, unavailable_reason = ?2, updated_at = ?3
+             WHERE id = ?1",
+            params![profile_id, reason, checked_at],
+        )?;
+        Ok(())
+    }
+
+    /// Removes only tool-owned index rows. The returned snapshot path may be
+    /// deleted by the caller after it has been validated against data_dir.
+    pub fn remove_profile_index(&self, profile_id: &str) -> AppResult<Option<String>> {
+        let transaction = self.connection.unchecked_transaction()?;
+        let snapshot_path = transaction
+            .query_row(
+                "SELECT snapshot_path FROM official_auth_snapshots WHERE profile_id = ?1",
+                [profile_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+        transaction.execute(
+            "DELETE FROM provider_thread_replicas WHERE profile_id = ?1",
+            [profile_id],
+        )?;
+        transaction.execute(
+            "DELETE FROM provider_configurations WHERE profile_id = ?1",
+            [profile_id],
+        )?;
+        transaction.execute(
+            "DELETE FROM official_auth_snapshots WHERE profile_id = ?1",
+            [profile_id],
+        )?;
+        transaction.execute(
+            "DELETE FROM provider_switch_transactions WHERE profile_id = ?1 AND phase = 'complete'",
+            [profile_id],
+        )?;
+        transaction.execute("DELETE FROM profiles WHERE id = ?1", [profile_id])?;
+        transaction.commit()?;
+        Ok(snapshot_path)
     }
 
     pub fn list_replicas(&self, profile_id: &str) -> AppResult<Vec<ReplicaMapping>> {
@@ -587,10 +665,13 @@ fn row_to_profile(row: &rusqlite::Row<'_>) -> rusqlite::Result<Profile> {
         provider_id: row.get(4)?,
         app_path: row.get(5)?,
         discovery_source: row.get(6)?,
-        providers: json_column::<DiscoveredProvider>(row, 7),
-        config_profiles: json_column::<DiscoveredConfigProfile>(row, 8),
-        created_at: row.get(9)?,
-        updated_at: row.get(10)?,
+        discovery_state: row.get(7)?,
+        last_seen_at: row.get(8)?,
+        unavailable_reason: row.get(9)?,
+        providers: json_column::<DiscoveredProvider>(row, 10),
+        config_profiles: json_column::<DiscoveredConfigProfile>(row, 11),
+        created_at: row.get(12)?,
+        updated_at: row.get(13)?,
     })
 }
 
@@ -805,5 +886,70 @@ mod tests {
 
         assert_eq!(mapping.source_sha256, "source-new");
         assert_eq!(mapping.replica_sha256, "replica-new");
+    }
+
+    #[test]
+    fn removes_only_tool_indexes_for_an_invalid_profile() {
+        let temp = TempDir::new().unwrap();
+        let store = Store::open(temp.path()).unwrap();
+        let home = temp.path().join("codex");
+        std::fs::create_dir_all(&home).unwrap();
+        let timestamp = Utc::now().to_rfc3339();
+        store
+            .insert_profile(&Profile {
+                id: "profile".into(),
+                name: "Profile".into(),
+                kind: ProfileKind::ChatGptAccount,
+                codex_home: home.to_string_lossy().to_string(),
+                provider_id: "openai".into(),
+                app_path: None,
+                discovery_source: "test".into(),
+                discovery_state: "active".into(),
+                last_seen_at: Some(timestamp.clone()),
+                unavailable_reason: None,
+                providers: Vec::new(),
+                config_profiles: Vec::new(),
+                created_at: timestamp.clone(),
+                updated_at: timestamp.clone(),
+            })
+            .unwrap();
+        store
+            .upsert_provider_config(&ProviderConfigRow {
+                profile_id: "profile".into(),
+                provider_id: "relay".into(),
+                base_url: "https://example.invalid/v1".into(),
+                requires_openai_auth: true,
+                api_key: "sk-test".into(),
+                managed_by_tool: true,
+                created_at: timestamp.clone(),
+                updated_at: timestamp,
+            })
+            .unwrap();
+        let snapshot_path = temp.path().join("auth-snapshots/hash/auth.json");
+        std::fs::create_dir_all(snapshot_path.parent().unwrap()).unwrap();
+        std::fs::write(&snapshot_path, b"snapshot").unwrap();
+        store
+            .save_official_snapshot(&OfficialSnapshotRow {
+                profile_id: "profile".into(),
+                snapshot_path: snapshot_path.to_string_lossy().to_string(),
+                source_sha256: "hash".into(),
+                source_modified_at: None,
+                captured_at: Utc::now().to_rfc3339(),
+            })
+            .unwrap();
+
+        let returned_snapshot = store.remove_profile_index("profile").unwrap();
+
+        assert_eq!(
+            returned_snapshot.as_deref(),
+            Some(snapshot_path.to_str().unwrap())
+        );
+        assert!(store.get_profile("profile").is_err());
+        assert!(store
+            .get_provider_config("profile", "relay")
+            .unwrap()
+            .is_none());
+        assert!(store.get_official_snapshot("profile").unwrap().is_none());
+        assert!(snapshot_path.is_file());
     }
 }

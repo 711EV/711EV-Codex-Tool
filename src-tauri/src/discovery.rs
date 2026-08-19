@@ -30,6 +30,13 @@ pub struct DiscoveryScan {
     pub instances: Vec<DiscoveredInstance>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CodexHomeStatus {
+    Valid,
+    Invalid,
+    Unavailable,
+}
+
 #[derive(Debug, Clone)]
 struct Candidate {
     path: PathBuf,
@@ -278,7 +285,7 @@ fn discover_candidates(candidates: Vec<Candidate>) -> DiscoveryScan {
         if parent.parent().is_none() {
             continue;
         }
-        collect_directories(parent, "已发现实例的同级目录", &mut sibling_candidates);
+        collect_possible_directories(parent, "已发现实例的同级目录", &mut sibling_candidates);
     }
 
     let existing = verified
@@ -354,40 +361,111 @@ fn is_codex_home(home: &Path) -> bool {
     if !home.is_dir() {
         return false;
     }
-    if ["session_index.jsonl", ".codex-global-state.json"]
+    let has_strong_data = ["session_index.jsonl", ".codex-global-state.json"]
         .iter()
         .any(|name| home.join(name).is_file())
-        || ["sessions", "archived_sessions"]
-            .iter()
-            .any(|name| home.join(name).is_dir())
-    {
+        || contains_state_database(home)
+        || contains_state_database(&home.join("sqlite"));
+    if has_strong_data {
         return true;
     }
-    contains_state_database(home)
-        || contains_state_database(&home.join("sqlite"))
-        || is_codex_config(&home.join("config.toml"))
+
+    let has_session_data = ["sessions", "archived_sessions"]
+        .iter()
+        .any(|name| home.join(name).is_dir())
+        || home.join("sqlite").is_dir();
+    has_session_data && is_codex_config(&home.join("config.toml"))
 }
 
 fn is_codex_config(path: &Path) -> bool {
     let Some(value) = read_toml(path) else {
         return false;
     };
+    if value.get("model_provider").is_some() || value.get("model_providers").is_some() {
+        return true;
+    }
     [
-        "model",
-        "model_provider",
-        "model_providers",
-        "profile",
-        "profiles",
-        "approval_policy",
+        "cli_auth_credentials_store",
+        "disable_response_storage",
         "sandbox_mode",
-        "projects",
-        "features",
         "mcp_servers",
-        "personality",
-        "web_search",
     ]
     .iter()
-    .any(|key| value.get(*key).is_some())
+    .filter(|key| value.get(**key).is_some())
+    .count()
+        >= 2
+}
+
+pub fn validate_codex_home(home: &Path) -> CodexHomeStatus {
+    match fs::metadata(home) {
+        Ok(metadata) if metadata.is_dir() => {
+            if is_codex_home(home) {
+                CodexHomeStatus::Valid
+            } else if has_probe_permission_error(home) {
+                CodexHomeStatus::Unavailable
+            } else {
+                CodexHomeStatus::Invalid
+            }
+        }
+        Ok(_) => CodexHomeStatus::Invalid,
+        Err(_) => CodexHomeStatus::Unavailable,
+    }
+}
+
+fn has_probe_permission_error(home: &Path) -> bool {
+    if matches!(fs::read_dir(home), Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied)
+    {
+        return true;
+    }
+    [
+        "config.toml",
+        "session_index.jsonl",
+        ".codex-global-state.json",
+        "sessions",
+        "archived_sessions",
+        "sqlite",
+    ]
+    .iter()
+    .any(|name| {
+        matches!(
+            fs::metadata(home.join(name)),
+            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied
+        )
+    })
+}
+
+fn is_possible_codex_directory(path: &Path) -> bool {
+    if !path.is_dir() {
+        return false;
+    }
+    let name = path
+        .file_name()
+        .and_then(OsStr::to_str)
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    if name == ".codex" || name.contains("codex") {
+        return true;
+    }
+    [
+        "config.toml",
+        "session_index.jsonl",
+        ".codex-global-state.json",
+    ]
+    .iter()
+    .any(|file| path.join(file).is_file())
+        || contains_state_database(&path.join("sqlite"))
+}
+
+fn collect_possible_directories(root: &Path, source: &str, candidates: &mut Vec<Candidate>) {
+    let Ok(entries) = fs::read_dir(root) else {
+        return;
+    };
+    for entry in entries.flatten().take(MAX_DIRECTORY_ENTRIES) {
+        let path = entry.path();
+        if is_possible_codex_directory(&path) {
+            push_candidate(candidates, path, source, None, None);
+        }
+    }
 }
 
 fn contains_state_database(directory: &Path) -> bool {
@@ -731,6 +809,7 @@ mod tests {
         let temp = TempDir::new().unwrap();
         let home = temp.path().join("account");
         fs::create_dir_all(home.join("sessions")).unwrap();
+        fs::write(home.join("config.toml"), "model_provider = \"openai\"\n").unwrap();
         fs::write(home.join("auth.json"), b"not-json-and-never-parsed").unwrap();
         let scan = discover_candidates(vec![Candidate {
             path: home,
@@ -739,6 +818,35 @@ mod tests {
             app_path: None,
         }]);
         assert_eq!(scan.instances.len(), 1);
+    }
+
+    #[test]
+    fn rejects_sessions_only_directory() {
+        let temp = TempDir::new().unwrap();
+        fs::create_dir_all(temp.path().join("sessions")).unwrap();
+        let scan = discover_candidates(vec![Candidate {
+            path: temp.path().to_path_buf(),
+            source: "test".into(),
+            name_hint: None,
+            app_path: None,
+        }]);
+        assert!(scan.instances.is_empty());
+    }
+
+    #[test]
+    fn does_not_discover_claude_like_sibling_from_sessions_only() {
+        let temp = TempDir::new().unwrap();
+        let codex = codex_home(temp.path(), ".codex", "model_provider = \"openai\"\n");
+        let claude = temp.path().join(".claude");
+        fs::create_dir_all(claude.join("sessions")).unwrap();
+        let scan = discover_candidates(vec![Candidate {
+            path: codex,
+            source: "test".into(),
+            name_hint: None,
+            app_path: None,
+        }]);
+        assert_eq!(scan.instances.len(), 1);
+        assert!(scan.instances[0].home.ends_with(".codex"));
     }
 
     #[test]
