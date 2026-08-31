@@ -21,7 +21,7 @@ jobs:
               --repo "$GITHUB_REPOSITORY" \
               --verify-tag \
               --draft \
-              --title "711EV-Codex-Tool $GITHUB_REF_NAME" \
+              --title "ChatGPT中转工具 $GITHUB_REF_NAME" \
               --notes "正在生成跨平台安装包。"
           fi
 
@@ -36,6 +36,10 @@ jobs:
           git remote add origin "https://github.com/$env:GITHUB_REPOSITORY.git"
           git fetch --no-tags --depth=1 origin $env:GITHUB_SHA
           git checkout --detach FETCH_HEAD
+      - name: Use Node.js 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
       - name: Prepare toolchains
         shell: pwsh
         run: |
@@ -93,6 +97,10 @@ jobs:
           git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
           git fetch --no-tags --depth=1 origin "$GITHUB_SHA"
           git checkout --detach FETCH_HEAD
+      - name: Use Node.js 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
       - name: Prepare toolchains
         shell: bash
         run: |
@@ -149,6 +157,10 @@ jobs:
           git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
           git fetch --no-tags --depth=1 origin "$GITHUB_SHA"
           git checkout --detach FETCH_HEAD
+      - name: Use Node.js 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
       - name: Download release assets
         env:
           GH_TOKEN: ${{ github.token }}

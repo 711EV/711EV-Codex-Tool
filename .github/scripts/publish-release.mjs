@@ -20,6 +20,15 @@ const packageJson = JSON.parse(await readFile(path.join(projectRoot, "package.js
 const version = packageJson.version;
 const releaseHighlightsByVersion = new Map([
   [
+    "1.1.8",
+    `- 产品界面、窗口标题、安装快捷方式与应用图标统一升级为“ChatGPT中转工具”，保留原可执行文件名和升级标识以兼容已有安装。
+- 重构 ChatGPT Desktop 探测与重启：支持 Windows Store、独立安装和 macOS App，按目标 \`CODEX_HOME\` 安全匹配主进程并排除 CLI、App Server 与 Chromium 辅助进程。
+- 全新竖屏供应商工作台：支持多配置目录、供应商状态与会话统计、711EV 配置预填、单供应商刷新，以及 API 地址/API 密钥查看与复制。
+- 完善官方账号与中转供应商切换：官方账号隐私信息不展示，中转配置使用事务化原子写入，并保留官方 OAuth 本地快照恢复能力。
+- 重做会话恢复与清理：只恢复其他供应商的主会话，清理严格限定当前打开的供应商，支持多选删除归档会话和子会话，并在操作前友好确认关闭 ChatGPT。
+- 对齐 desk 暗色桌面体验：系统托盘、公共弹窗、Message 队列、Tooltip、DPI 自适应、8px 圆角及四周暗色阴影；移除前端迁移入口。`,
+  ],
+  [
     "0.1.102",
     `- 收紧 Codex 存储位置识别规则，不再把仅包含 sessions 等通用目录结构的 Claude 或普通目录识别为 Codex 存储位置。
 - 重新发现时校验本地索引：明确无效的记录只从工具索引中清理，暂时不存在或无法访问的位置会保留为暂不可用，不删除用户目录或会话文件。
@@ -61,7 +70,7 @@ ${releaseHighlights}
 本版本提供以下下载文件：
 
 - Windows 便携版：无需安装，下载后可直接运行。
-- Windows 安装包：支持选择安装目录并创建桌面快捷方式。
+- Windows 安装包：支持选择安装目录，安装后创建“ChatGPT中转工具”桌面快捷方式。
 - macOS 通用安装包：同时支持 Intel 与 Apple Silicon 设备。
 
 \`.sig\` 和 \`latest.json\` 为应用自动更新所需文件，普通用户无需手动下载。`;
@@ -75,7 +84,7 @@ if (releaseExists) {
     "--repo",
     repository,
     "--title",
-    `711EV-Codex-Tool ${tag}`,
+    `ChatGPT中转工具 ${tag}`,
     "--notes",
     notes,
     "--draft=false",
@@ -89,7 +98,7 @@ if (releaseExists) {
     repository,
     "--verify-tag",
     "--title",
-    `711EV-Codex-Tool ${tag}`,
+    `ChatGPT中转工具 ${tag}`,
     "--notes",
     notes,
     ...assetPaths,

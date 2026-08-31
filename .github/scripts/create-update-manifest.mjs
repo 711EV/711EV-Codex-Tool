@@ -25,7 +25,7 @@ const macPlatform = {
 
 const manifest = {
   version,
-  notes: `711EV-Codex-Tool ${version}`,
+  notes: `ChatGPT中转工具 ${version}`,
   pub_date: new Date().toISOString(),
   platforms: {
     "windows-x86_64": {
