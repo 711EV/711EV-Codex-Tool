@@ -47,7 +47,7 @@ jobs:
           npm --version
           rustup toolchain install stable --profile minimal
           rustup default stable
-      - run: npm install --no-package-lock
+      - run: npm ci
       - run: npm exec vue-tsc -- --noEmit
       - run: npm exec vite -- build
       - name: Build Windows applications
@@ -110,7 +110,7 @@ jobs:
           rustup toolchain install stable --profile minimal
           rustup default stable
           rustup target add aarch64-apple-darwin x86_64-apple-darwin
-      - run: npm install --no-package-lock
+      - run: npm ci
       - run: npm exec vue-tsc -- --noEmit
       - run: npm exec vite -- build
       - name: Build universal macOS applications
