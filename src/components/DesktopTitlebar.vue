@@ -39,11 +39,11 @@ async function openExternal(url: string) {
     </div>
     <div class="desktop-window-controls" data-no-drag>
       <div class="desktop-link-controls">
-        <button type="button" class="desktop-window-button desktop-link-button" aria-label="打开 GitHub 项目" @click="openExternal(githubUrl)">
-          <Github :size="15" />
-        </button>
         <button type="button" class="desktop-window-button desktop-link-button" aria-label="打开交流群" @click="openExternal(qqUrl)">
           <QQLogo :size="15" />
+        </button>
+        <button type="button" class="desktop-window-button desktop-link-button" aria-label="打开 GitHub 项目" @click="openExternal(githubUrl)">
+          <Github :size="15" />
         </button>
       </div>
       <div class="desktop-action-controls">

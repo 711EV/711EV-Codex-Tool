@@ -21,7 +21,7 @@ use std::sync::{
 
 use chrono::Utc;
 
-use tauri::{Emitter, Manager, PhysicalSize, WindowEvent};
+use tauri::{Emitter, Manager, WindowEvent};
 
 use models::{
     AppState, ArchiveCleanupPreview, ArchiveCleanupResult, DiscoveryReport, ProviderConfigInput,
@@ -51,69 +51,13 @@ impl AppLifecycle {
 
 pub fn show_main_window(app: &tauri::AppHandle) -> tauri::Result<()> {
     if let Some(window) = app.get_webview_window("main") {
-        let scale = window
-            .current_monitor()?
-            .or(window.primary_monitor()?)
-            .map(|monitor| monitor.scale_factor())
-            .unwrap_or(1.0);
-        apply_fixed_window_size(&window, scale)?;
+        window::arrange_initial_window(&window)?;
         window::remove_native_border(&window)?;
         window.unminimize()?;
         window.show()?;
         window.set_focus()?;
     }
     Ok(())
-}
-
-fn fixed_physical_size(scale_factor: f64) -> PhysicalSize<u32> {
-    let scale = if scale_factor.is_finite() && scale_factor > 0.0 {
-        scale_factor
-    } else {
-        1.0
-    };
-    PhysicalSize::new(
-        (420.0 * scale).round() as u32,
-        (794.0 * scale).round() as u32,
-    )
-}
-
-fn apply_fixed_window_size(window: &tauri::WebviewWindow, scale_factor: f64) -> tauri::Result<()> {
-    let size = fixed_physical_size(scale_factor);
-    window.set_size(size)?;
-    window.set_min_size(Some(size))?;
-    window.set_max_size(Some(size))?;
-    Ok(())
-}
-
-#[cfg(test)]
-mod window_size_tests {
-    use super::fixed_physical_size;
-
-    #[test]
-    fn converts_logical_size_to_physical_size_for_common_dpi_values() {
-        assert_eq!(fixed_physical_size(1.0), tauri::PhysicalSize::new(420, 794));
-        assert_eq!(
-            fixed_physical_size(1.25),
-            tauri::PhysicalSize::new(525, 993)
-        );
-        assert_eq!(
-            fixed_physical_size(1.5),
-            tauri::PhysicalSize::new(630, 1191)
-        );
-        assert_eq!(
-            fixed_physical_size(2.0),
-            tauri::PhysicalSize::new(840, 1588)
-        );
-    }
-
-    #[test]
-    fn invalid_scale_falls_back_to_one() {
-        assert_eq!(fixed_physical_size(0.0), tauri::PhysicalSize::new(420, 794));
-        assert_eq!(
-            fixed_physical_size(f64::NAN),
-            tauri::PhysicalSize::new(420, 794)
-        );
-    }
 }
 
 fn lock_store(context: &AppContext) -> Result<std::sync::MutexGuard<'_, Store>, String> {
@@ -675,19 +619,14 @@ pub fn run() {
                 }
                 window.set_resizable(false)?;
                 window.set_maximizable(false)?;
-                let scale = window
-                    .current_monitor()?
-                    .or(window.primary_monitor()?)
-                    .map(|m| m.scale_factor())
-                    .unwrap_or(1.0);
-                apply_fixed_window_size(&window, scale)?;
                 window::remove_native_border(&window)?;
+                window::arrange_initial_window(&window)?;
                 window.show()?;
                 window.set_focus()?;
                 let close_window = window.clone();
                 window.on_window_event(move |event| match event {
-                    WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
-                        let _ = apply_fixed_window_size(&close_window, *scale_factor);
+                    WindowEvent::ScaleFactorChanged { .. } => {
+                        let _ = window::arrange_initial_window(&close_window);
                         let _ = window::remove_native_border(&close_window);
                     }
                     WindowEvent::CloseRequested { api, .. } => {

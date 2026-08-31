@@ -1,4 +1,90 @@
-use tauri::WebviewWindow;
+use tauri::{Monitor, PhysicalPosition, PhysicalSize, WebviewWindow};
+
+const MIN_WIDTH: f64 = 320.0;
+const MIN_HEIGHT: f64 = 605.0;
+const MAX_WIDTH: f64 = 420.0;
+const MAX_HEIGHT: f64 = 794.0;
+const TARGET_ASPECT_RATIO: f64 = 9.0 / 17.0;
+const SCREEN_AREA_RATIO: f64 = 1.0 / 8.5;
+const RIGHT_GAP_RATIO: f64 = 0.10;
+const MAX_WORK_AREA_RATIO: f64 = 0.90;
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct LogicalGeometry {
+    width: f64,
+    height: f64,
+    x: f64,
+    y: f64,
+}
+
+fn calculate_geometry(
+    work_x: f64,
+    work_y: f64,
+    work_width: f64,
+    work_height: f64,
+) -> LogicalGeometry {
+    let target_area = work_width * work_height * SCREEN_AREA_RATIO;
+    let width_from_area = (target_area * TARGET_ASPECT_RATIO).sqrt();
+    let minimum_width = MIN_WIDTH.max(MIN_HEIGHT * TARGET_ASPECT_RATIO);
+    let absolute_maximum_width = MAX_WIDTH.min(MAX_HEIGHT * TARGET_ASPECT_RATIO);
+    // 工作区限制只在不低于最小尺寸时生效。极小工作区也必须保持最小尺寸，
+    // 允许窗口向工作区边界外延伸，避免文字和控件被无限压缩。
+    let fitting_maximum_width = (work_width * MAX_WORK_AREA_RATIO)
+        .min(work_height * MAX_WORK_AREA_RATIO * TARGET_ASPECT_RATIO)
+        .max(minimum_width);
+    let maximum_width = absolute_maximum_width.min(fitting_maximum_width);
+    let width = width_from_area.clamp(minimum_width, maximum_width);
+    let height = width / TARGET_ASPECT_RATIO;
+    let right_gap = work_width * RIGHT_GAP_RATIO;
+    let x = (work_x + work_width - width - right_gap).max(work_x);
+    let y = work_y + ((work_height - height) / 2.0).max(0.0);
+
+    LogicalGeometry {
+        width,
+        height,
+        x,
+        y,
+    }
+}
+
+fn monitor_for_window(window: &WebviewWindow) -> tauri::Result<Option<Monitor>> {
+    window
+        .current_monitor()?
+        .map_or_else(|| window.primary_monitor(), |monitor| Ok(Some(monitor)))
+}
+
+fn apply_geometry(window: &WebviewWindow, monitor: &Monitor) -> tauri::Result<()> {
+    let scale = monitor.scale_factor();
+    let work = monitor.work_area();
+    let logical = calculate_geometry(
+        work.position.x as f64 / scale,
+        work.position.y as f64 / scale,
+        work.size.width as f64 / scale,
+        work.size.height as f64 / scale,
+    );
+
+    let to_physical = |value: f64| (value * scale).round();
+    let locked_width = to_physical(logical.width) as u32;
+    let locked_height = to_physical(logical.height) as u32;
+    let size = PhysicalSize::new(locked_width, locked_height);
+    window.set_size(size)?;
+    window.set_min_size(Some(size))?;
+    window.set_max_size(Some(size))?;
+    let outer_size = window.outer_size()?;
+    let right_gap = (work.size.width as f64 * RIGHT_GAP_RATIO).round() as i32;
+    window.set_position(PhysicalPosition::new(
+        work.position.x + work.size.width as i32 - outer_size.width as i32 - right_gap,
+        work.position.y + (work.size.height as i32 - outer_size.height as i32) / 2,
+    ))?;
+    Ok(())
+}
+
+pub fn arrange_initial_window(window: &WebviewWindow) -> tauri::Result<()> {
+    if let Some(monitor) = monitor_for_window(window)? {
+        apply_geometry(window, &monitor)?;
+    }
+    Ok(())
+}
 
 /// Remove native decoration artifacts and preserve the rounded transparent
 /// shell used by the desk client.
