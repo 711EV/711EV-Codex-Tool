@@ -4,6 +4,7 @@ const MIN_WIDTH: f64 = 320.0;
 const MIN_HEIGHT: f64 = 605.0;
 const MAX_WIDTH: f64 = 420.0;
 const MAX_HEIGHT: f64 = 794.0;
+const SHADOW_GUTTER: f64 = 16.0;
 const TARGET_ASPECT_RATIO: f64 = 9.0 / 17.0;
 const SCREEN_AREA_RATIO: f64 = 1.0 / 8.5;
 const RIGHT_GAP_RATIO: f64 = 0.10;
@@ -29,14 +30,16 @@ fn calculate_geometry(
     let absolute_maximum_width = MAX_WIDTH.min(MAX_HEIGHT * TARGET_ASPECT_RATIO);
     // 工作区限制只在不低于最小尺寸时生效。极小工作区也必须保持最小尺寸，
     // 允许窗口向工作区边界外延伸，避免文字和控件被无限压缩。
-    let fitting_maximum_width = (work_width * MAX_WORK_AREA_RATIO)
-        .min(work_height * MAX_WORK_AREA_RATIO * TARGET_ASPECT_RATIO)
+    let fitting_maximum_width = (work_width * MAX_WORK_AREA_RATIO - SHADOW_GUTTER * 2.0)
+        .min((work_height * MAX_WORK_AREA_RATIO - SHADOW_GUTTER * 2.0) * TARGET_ASPECT_RATIO)
         .max(minimum_width);
     let maximum_width = absolute_maximum_width.min(fitting_maximum_width);
-    let width = width_from_area.clamp(minimum_width, maximum_width);
-    let height = width / TARGET_ASPECT_RATIO;
+    let shell_width = width_from_area.clamp(minimum_width, maximum_width);
+    let shell_height = shell_width / TARGET_ASPECT_RATIO;
+    let width = shell_width + SHADOW_GUTTER * 2.0;
+    let height = shell_height + SHADOW_GUTTER * 2.0;
     let right_gap = work_width * RIGHT_GAP_RATIO;
-    let x = (work_x + work_width - width - right_gap).max(work_x);
+    let x = (work_x + work_width - width - right_gap + SHADOW_GUTTER).max(work_x);
     let y = work_y + ((work_height - height) / 2.0).max(0.0);
 
     LogicalGeometry {
@@ -72,10 +75,13 @@ fn apply_geometry(window: &WebviewWindow, monitor: &Monitor) -> tauri::Result<()
     window.set_max_size(Some(size))?;
     let outer_size = window.outer_size()?;
     let right_gap = (work.size.width as f64 * RIGHT_GAP_RATIO).round() as i32;
+    let shadow_gutter = to_physical(SHADOW_GUTTER) as i32;
     window.set_position(PhysicalPosition::new(
-        work.position.x + work.size.width as i32 - outer_size.width as i32 - right_gap,
+        work.position.x + work.size.width as i32 - outer_size.width as i32 - right_gap
+            + shadow_gutter,
         work.position.y + (work.size.height as i32 - outer_size.height as i32) / 2,
     ))?;
+    refresh_native_rounding(window)?;
     Ok(())
 }
 
@@ -154,6 +160,48 @@ pub fn remove_native_border(window: &WebviewWindow) -> tauri::Result<()> {
 #[cfg(target_os = "macos")]
 pub fn refresh_native_rounding(_window: &WebviewWindow) -> tauri::Result<()> {
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn keeps_shell_ratio_and_reserves_shadow_gutter() {
+        let geometry = calculate_geometry(0.0, 0.0, 1920.0, 1040.0);
+        let shell_width = geometry.width - SHADOW_GUTTER * 2.0;
+        let shell_height = geometry.height - SHADOW_GUTTER * 2.0;
+
+        assert!((shell_width - 352.7).abs() < 2.0);
+        assert!((shell_height - 666.1).abs() < 2.0);
+        assert!((shell_width / shell_height - TARGET_ASPECT_RATIO).abs() < 0.001);
+        assert!((geometry.x - (1920.0 - shell_width - 192.0 - SHADOW_GUTTER)).abs() < 0.1);
+        assert!((geometry.y - ((1040.0 - geometry.height) / 2.0)).abs() < 0.1);
+    }
+
+    #[test]
+    fn keeps_minimum_shell_size_on_small_work_areas() {
+        let geometry = calculate_geometry(-100.0, 20.0, 500.0, 340.0);
+        assert!(
+            (geometry.width
+                - MIN_WIDTH.max(MIN_HEIGHT * TARGET_ASPECT_RATIO)
+                - SHADOW_GUTTER * 2.0)
+                .abs()
+                < 0.1
+        );
+        assert!((geometry.height - MIN_HEIGHT - SHADOW_GUTTER * 2.0).abs() < 0.1);
+        assert!((geometry.x - 13.7).abs() < 0.1);
+        assert_eq!(geometry.y, 20.0);
+    }
+
+    #[test]
+    fn caps_large_displays_at_maximum_shell_size() {
+        let geometry = calculate_geometry(0.0, 0.0, 3840.0, 2120.0);
+        assert_eq!(geometry.width, MAX_WIDTH + SHADOW_GUTTER * 2.0);
+        assert!(
+            (geometry.height - (MAX_WIDTH / TARGET_ASPECT_RATIO) - SHADOW_GUTTER * 2.0).abs() < 0.1
+        );
+    }
 }
 
 #[cfg(not(any(target_os = "windows", target_os = "macos")))]

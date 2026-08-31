@@ -38,6 +38,10 @@
   --danger: #f87171;
   --danger-soft: rgba(248, 113, 113, 0.14);
   --titlebar-bg: #141414;
+  --shell-shadow-gutter: 16px;
+  --shadow-shell: 0 1px 3px rgba(0, 0, 0, 0.16),
+    0 3px 8px rgba(0, 0, 0, 0.09),
+    0 6px 14px rgba(0, 0, 0, 0.035);
   --section-heading-height: 58px;
   --text-button-height: 38px;
   font-family:
@@ -72,6 +76,10 @@ body,
   height: 100%;
   margin: 0;
   overflow: hidden;
+}
+
+#app {
+  padding: var(--shell-shadow-gutter);
 }
 
 button,
@@ -121,7 +129,7 @@ input:focus-visible {
   background: var(--app-bg);
   border: 0;
   border-radius: 8px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
+  box-shadow: var(--shadow-shell);
 }
 html, body, #app { min-width: 0; background: transparent; }
 
@@ -2924,8 +2932,8 @@ select:focus,
   }
 }
 
-/* Fixed portrait desktop shell.  The native window keeps 420x794 logical px;
-   these rules intentionally use logical CSS pixels so WebView DPI scaling is automatic. */
+/* Fixed portrait desktop shell. The visible shell keeps its logical size;
+   the native window adds a transparent gutter for the shadow. */
 .app-frame {
   position: relative;
   display: flex;
@@ -2938,7 +2946,7 @@ select:focus,
   background: var(--app-bg);
   border: 0;
   border-radius: 8px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
+  box-shadow: var(--shadow-shell);
 }
 .desktop-titlebar {
   position: relative;
@@ -3063,7 +3071,7 @@ select:focus,
 .desktop-titlebar { display: grid; grid-template-columns: minmax(0, 1fr) auto; justify-content: initial; border-bottom: 1px solid color-mix(in srgb, var(--border) 58%, transparent); }
 .desktop-titlebar-brand { justify-self: start; }
 .desktop-window-controls { justify-self: end; margin-left: 0; }
-.app-frame { box-shadow: 0 4px 14px rgba(0, 0, 0, 0.22); }
+.app-frame { box-shadow: var(--shadow-shell); }
 .app-content { background: var(--app-bg); }
 .app-footer { height: 38px; min-height: 38px; flex-basis: 38px; align-items: center; padding: 5px 8px; background: var(--app-bg); border-top-color: transparent; box-shadow: none; }
 .app-footer button { width: 100%; min-width: 0; height: 28px; min-height: 28px; margin: 0; justify-content: center; }
@@ -3200,7 +3208,7 @@ select:focus,
 .provider-cards { gap: 10px; padding-top: 0; padding-bottom: 0; }
 .provider-cards > .provider-card:first-child { margin-top: 10px; }
 .app-footer { height: 38px; min-height: 38px; flex-basis: 38px; padding: 5px 8px; border-top: 0; box-shadow: inset 0 1px color-mix(in srgb, var(--border) 86%, transparent); }
-.app-frame { box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.035), inset 0 0 18px rgba(0, 0, 0, 0.2), 0 5px 18px rgba(0, 0, 0, 0.32); }
+.app-frame { box-shadow: var(--shadow-shell); }
 .storage-bar { height: 42px; min-height: 42px; flex-basis: 42px; padding: 4px 10px 3px; align-items: center; }
 .modal-dialog { width: min(390px, calc(100% - 20px)); max-height: calc(100% - 20px); overflow: auto; }
 @keyframes message-move-in { from { max-height: 0; padding-top: 0; padding-bottom: 0; opacity: 0; transform: translateY(100%); } to { max-height: 150px; padding-top: 8px; padding-bottom: 8px; opacity: 1; transform: translateY(0); } }
@@ -3240,21 +3248,18 @@ select:focus,
   background: var(--surface-hover);
 }
 
-/* Transparent frameless windows need the root surface clipped as well as the
-   inner shell; otherwise WebView/native pixels can leak through as dark
-   wedges at the four corners. */
+/* Match desk: the transparent root is only a gutter for the dark shell
+   shadow; the visible shell owns clipping and rounded corners. */
 html,
 body,
 #app {
   overflow: hidden;
   background: transparent;
-  border-radius: 8px;
 }
 .app-frame {
   overflow: hidden;
   border-radius: 8px;
-  /* Keep the requested depth without the inset shading that darkens corners. */
-  box-shadow: 0 5px 18px rgba(0, 0, 0, 0.24);
+  box-shadow: var(--shadow-shell);
 }
 
 /* Provider actions mirror the four equal footer menu cells.  Empty leading

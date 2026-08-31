@@ -12,12 +12,12 @@
     "windows": [
       {
         "title": "ChatGPT中转工具",
-        "width": 353,
-        "height": 666,
-        "minWidth": 320,
-        "minHeight": 605,
-        "maxWidth": 420,
-        "maxHeight": 794,
+        "width": 385,
+        "height": 698,
+        "minWidth": 352,
+        "minHeight": 637,
+        "maxWidth": 452,
+        "maxHeight": 826,
         "resizable": false,
         "maximizable": false,
         "decorations": false,
