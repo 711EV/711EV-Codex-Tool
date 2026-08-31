@@ -529,48 +529,10 @@ export const backend = {
     });
   },
 
-  async replicationMigrate(
-    profileId: string,
-    sourceThreadIds: string[],
-    requestId: string,
-    forceCloseClient = false,
-  ): Promise<ReplicationResult> {
-    if (!isTauri()) {
-      const preview = await this.replicationPreview(profileId, sourceThreadIds);
-      return {
-        jobId: "demo-migration-job",
-        targetProviderId: preview.targetProviderId,
-        created: preview.items
-          .filter((item) => item.action === "create_replica")
-          .map((item) => ({
-            sourceThreadId: item.threadId,
-            replicaThreadId: `${item.threadId}-migrated`,
-            title: item.title,
-            status: "migrated",
-            message: "已迁移到当前供应商并删除来源会话",
-          })),
-        skipped: [],
-        failed: [],
-        clientRestarted: false,
-        warning: null,
-      };
-    }
-    return invoke<ReplicationResult>("replication_migrate", {
-      profileId,
-      sourceThreadIds,
-      requestId,
-      forceCloseClient,
-    });
-  },
-
-  async restartCodexClient(
-    profileId: string,
-    forceCloseClient = false,
-  ): Promise<boolean> {
+  async restartCodexClient(profileId: string, _forceCloseClient = false): Promise<boolean> {
     if (!isTauri()) return true;
     return invoke<boolean>("restart_codex_client", {
       profileId,
-      forceCloseClient,
     });
   },
 

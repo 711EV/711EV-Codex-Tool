@@ -30,7 +30,6 @@ export const useWorkspaceStore = defineStore("workspace", () => {
   const loading = ref(false);
   const providerSwitching = ref(false);
   const syncing = ref(false);
-  const migrating = ref(false);
   const restartingClient = ref(false);
   const cleaningArchived = ref(false);
   const cleaningChildren = ref(false);
@@ -168,9 +167,6 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     try {
       const saved = await backend.providerConfigSave(input);
       await refreshProviders();
-      if (selectedProviderId.value !== saved.providerId) {
-        await selectProvider(saved.providerId);
-      }
       return saved;
     } catch (reason) {
       error.value = messageOf(reason);
@@ -284,11 +280,11 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     return backend.replicationPreview(activeProfileId.value, selectedThreadIds.value);
   }
 
-  async function previewArchivedCleanup(): Promise<ArchiveCleanupPreview> {
-    if (!activeProfileId.value || !selectedProviderId.value) {
+  async function previewArchivedCleanup(providerId = selectedProviderId.value ?? ""): Promise<ArchiveCleanupPreview> {
+    if (!activeProfileId.value || !providerId) {
       throw new Error("未选择需要清理的供应商");
     }
-    return backend.archiveCleanupPreview(activeProfileId.value, selectedProviderId.value);
+    return backend.archiveCleanupPreview(activeProfileId.value, providerId);
   }
 
   async function cleanupArchivedSessions(
@@ -316,14 +312,11 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     }
   }
 
-  async function previewInvalidChildCleanup(): Promise<InvalidChildCleanupPreview> {
-    if (!activeProfileId.value || !selectedProviderId.value) {
+  async function previewInvalidChildCleanup(providerId = selectedProviderId.value ?? ""): Promise<InvalidChildCleanupPreview> {
+    if (!activeProfileId.value || !providerId) {
       throw new Error("未选择需要清理的供应商");
     }
-    return backend.invalidChildCleanupPreview(
-      activeProfileId.value,
-      selectedProviderId.value,
-    );
+    return backend.invalidChildCleanupPreview(activeProfileId.value, providerId);
   }
 
   async function cleanupInvalidChildSessions(
@@ -374,35 +367,12 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     }
   }
 
-  async function executeMigration(requestId: string, forceCloseClient = false) {
-    if (!activeProfileId.value) throw new Error("未选择 CODEX_HOME");
-    migrating.value = true;
-    error.value = null;
-    try {
-      const result = await backend.replicationMigrate(
-        activeProfileId.value,
-        selectedThreadIds.value,
-        requestId,
-        forceCloseClient,
-      );
-      lastResult.value = result;
-      selectedThreadIds.value = [];
-      await refreshProviders();
-      return result;
-    } catch (reason) {
-      error.value = messageOf(reason);
-      throw reason;
-    } finally {
-      migrating.value = false;
-    }
-  }
-
-  async function restartCodexClient(forceCloseClient = false) {
+  async function restartCodexClient(_forceCloseClient = false) {
     if (!activeProfileId.value) throw new Error("未选择 CODEX_HOME");
     restartingClient.value = true;
     error.value = null;
     try {
-      return await backend.restartCodexClient(activeProfileId.value, forceCloseClient);
+      return await backend.restartCodexClient(activeProfileId.value);
     } catch (reason) {
       error.value = messageOf(reason);
       throw reason;
@@ -454,7 +424,6 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     loading,
     providerSwitching,
     syncing,
-    migrating,
     restartingClient,
     cleaningArchived,
     cleaningChildren,
@@ -488,7 +457,6 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     cleanupInvalidChildSessions,
     previewReplication,
     executeReplication,
-    executeMigration,
     restartCodexClient,
     previewUpdatedSessions,
     syncUpdatedSessions,

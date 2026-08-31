@@ -545,7 +545,7 @@ fn cleanup_sessions(
         let client_restarted = match restart_guard.finish() {
             Ok(value) => value,
             Err(error) => {
-                warnings.push(format!("客户端重启失败：{error}"));
+                warnings.push(format!("ChatGPT 重启失败：{error}"));
                 false
             }
         };
@@ -599,7 +599,7 @@ fn cleanup_sessions(
                         Some(delete_error) => {
                             format!("{delete_error}；删除后无法重新扫描确认结果")
                         }
-                        None => "Codex 已接受删除请求，但无法重新扫描确认结果".into(),
+                        None => "ChatGPT 已接受删除请求，但无法重新扫描确认结果".into(),
                     },
                 });
             }
@@ -610,7 +610,7 @@ fn cleanup_sessions(
     let client_restarted = match restart_guard.finish() {
         Ok(value) => value,
         Err(error) => {
-            warnings.push(format!("客户端重启失败：{error}"));
+            warnings.push(format!("ChatGPT 重启失败：{error}"));
             false
         }
     };
@@ -649,8 +649,8 @@ impl CleanupScope {
 
     fn still_exists_message(self) -> &'static str {
         match self {
-            Self::Archived => "Codex 返回删除成功，但本地归档文件仍然存在",
-            Self::InvalidChild => "Codex 返回删除成功，但本地子会话文件仍然存在",
+            Self::Archived => "ChatGPT 返回删除成功，但本地归档文件仍然存在",
+            Self::InvalidChild => "ChatGPT 返回删除成功，但本地子会话文件仍然存在",
         }
     }
 }
@@ -1242,7 +1242,7 @@ fn sync_updates_inner(
     let client_restarted = match restart_guard.finish() {
         Ok(value) => value,
         Err(error) => {
-            warnings.push(format!("客户端重启失败：{error}"));
+            warnings.push(format!("ChatGPT 重启失败：{error}"));
             false
         }
     };
@@ -1432,13 +1432,13 @@ fn execute_inner(
 
     progress.batch_stage(
         ReplicationProgressPhase::Finishing,
-        Some("正在完成会话索引与客户端状态处理".into()),
+        Some("正在完成会话索引与 ChatGPT 状态处理".into()),
     );
     FileExt::unlock(&lock)?;
     let client_restarted = match restart_guard.finish() {
         Ok(value) => value,
         Err(error) => {
-            warnings.push(format!("客户端重启失败：{error}"));
+            warnings.push(format!("ChatGPT 重启失败：{error}"));
             false
         }
     };

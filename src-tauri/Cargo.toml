@@ -1,6 +1,6 @@
 [package]
 name = "codex-local-sync"
-version = "0.1.102"
+version = "0.1.107"
 description = "Portable local Codex session synchronization"
 authors = ["Codex Local Sync contributors"]
 edition = "2021"
@@ -13,7 +13,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = [] }
+tauri = { version = "2", features = ["macos-private-api", "tray-icon"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = "0.8"
@@ -35,14 +35,27 @@ tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
 
 [target.'cfg(windows)'.dependencies]
+windows = { version = "0.61", features = [
+    "ApplicationModel",
+    "ApplicationModel_Core",
+    "Foundation_Collections",
+    "Management_Deployment",
+    "Win32_System_Com",
+    "Win32_UI_Shell"
+] }
 windows-sys = { version = "0.59", features = [
     "Win32_Foundation",
+    "Win32_Graphics_Dwm",
     "Win32_Storage_FileSystem",
     "Win32_System_Registry",
     "Win32_System_Threading",
     "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging"
 ] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-app-kit = { version = "0.3", default-features = false, features = ["NSColor", "NSView", "NSWindow", "objc2-quartz-core"] }
+objc2-quartz-core = { version = "0.3", default-features = false, features = ["CALayer", "objc2-core-foundation"] }
 
 [dev-dependencies]
 tempfile = "3"

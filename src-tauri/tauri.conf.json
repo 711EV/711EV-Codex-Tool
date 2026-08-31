@@ -1,24 +1,31 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "711EV-Codex-Tool",
+  "productName": "ChatGPT中转工具",
   "mainBinaryName": "711EV-Codex-Tool",
-  "version": "0.1.102",
+  "version": "0.1.107",
   "identifier": "com.codexlocalsync.desktop",
   "build": {
     "frontendDist": "../build"
   },
   "app": {
+    "macOSPrivateApi": true,
     "windows": [
       {
-        "title": "711EV-Codex-Tool",
-        "width": 1440,
-        "height": 900,
-        "minWidth": 1080,
-        "minHeight": 680,
-        "resizable": true,
+        "title": "ChatGPT中转工具",
+        "width": 420,
+        "height": 794,
+        "minWidth": 420,
+        "minHeight": 794,
+        "maxWidth": 420,
+        "maxHeight": 794,
+        "resizable": false,
+        "maximizable": false,
         "decorations": false,
+        "transparent": true,
+        "backgroundColor": "#00000000",
         "fullscreen": false,
-        "center": true
+        "center": true,
+        "visible": false
       }
     ],
     "security": {
@@ -30,8 +37,12 @@
     "targets": "all",
     "createUpdaterArtifacts": true,
     "icon": [
-      "icons/icon.ico",
-      "icons/icon.png"
+      "icons/32x32.png",
+      "icons/64x64.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
     ],
     "publisher": "711EV",
     "homepage": "https://www.711ev.com/",

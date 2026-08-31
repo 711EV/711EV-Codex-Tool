@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -68,9 +68,12 @@ struct ManagedInstanceReference {
 
 pub fn discover(known_profiles: &[Profile]) -> DiscoveryScan {
     let mut candidates = Vec::new();
-    collect_standard_candidates(&mut candidates);
+    // A running ChatGPT instance is the strongest source of truth because it
+    // carries the exact CODEX_HOME currently used by the desktop client.
     collect_process_candidates(&mut candidates);
-    collect_managed_metadata_candidates(&mut candidates);
+    if let Some(path) = std::env::var_os("CODEX_HOME").map(PathBuf::from) {
+        push_candidate(&mut candidates, path, "CODEX_HOME 环境变量", None, None);
+    }
     for profile in known_profiles {
         push_candidate(
             &mut candidates,
@@ -80,15 +83,15 @@ pub fn discover(known_profiles: &[Profile]) -> DiscoveryScan {
             profile.app_path.clone(),
         );
     }
+    // Keep the default home after explicitly registered homes.  The remaining
+    // standard roots are lower-priority fallbacks and are merged afterwards.
+    collect_standard_candidates(&mut candidates);
+    collect_managed_metadata_candidates(&mut candidates);
 
     discover_candidates(candidates)
 }
 
 fn collect_standard_candidates(candidates: &mut Vec<Candidate>) {
-    if let Some(path) = std::env::var_os("CODEX_HOME").map(PathBuf::from) {
-        push_candidate(candidates, path, "CODEX_HOME 环境变量", None, None);
-    }
-
     if let Some(home) = dirs::home_dir() {
         push_candidate(
             candidates,
@@ -130,6 +133,10 @@ fn collect_standard_candidates(candidates: &mut Vec<Candidate>) {
 }
 
 fn collect_process_candidates(candidates: &mut Vec<Candidate>) {
+    for home in crate::process::running_codex_homes() {
+        push_candidate(candidates, home, "运行中的 ChatGPT", None, None);
+    }
+
     let mut system = System::new_with_specifics(
         RefreshKind::nothing().with_processes(ProcessRefreshKind::everything()),
     );
@@ -140,8 +147,7 @@ fn collect_process_candidates(candidates: &mut Vec<Candidate>) {
         }
         let name = process.name().to_string_lossy().to_ascii_lowercase();
         let stem = name.strip_suffix(".exe").unwrap_or(&name);
-        let supported_process = stem == "codex"
-            || stem.starts_with("chatgpt")
+        let supported_process = is_chatgpt_desktop_process(stem, process.exe(), process.cmd())
             || stem == "cockpit-tools"
             || stem == "cockpit tools"
             || stem == "antigravity cockpit";
@@ -172,11 +178,46 @@ fn collect_process_candidates(candidates: &mut Vec<Candidate>) {
 }
 
 fn restartable_process_path(process_stem: &str, executable: Option<&Path>) -> Option<String> {
-    #[cfg(target_os = "windows")]
-    if !process_stem.starts_with("chatgpt") {
+    if !is_chatgpt_process_stem(process_stem) {
         return None;
     }
     executable.map(|path| path.to_string_lossy().to_string())
+}
+
+fn is_chatgpt_process_stem(stem: &str) -> bool {
+    stem == "chatgpt" || (cfg!(target_os = "macos") && stem == "codex")
+}
+
+fn is_chatgpt_desktop_process(
+    stem: &str,
+    executable: Option<&Path>,
+    command: &[std::ffi::OsString],
+) -> bool {
+    if !is_chatgpt_process_stem(stem) {
+        return false;
+    }
+    if command.iter().any(|argument| {
+        let value = argument.to_string_lossy().to_ascii_lowercase();
+        value == "--type"
+            || value.starts_with("--type=")
+            || value == "app-server"
+            || value == "--app-server"
+            || value == "app_server"
+    }) {
+        return false;
+    }
+    if cfg!(target_os = "macos") && stem == "codex" {
+        return executable.is_some_and(|path| {
+            path.to_string_lossy()
+                .to_ascii_lowercase()
+                .contains(".app/contents/macos")
+                || path
+                    .to_string_lossy()
+                    .to_ascii_lowercase()
+                    .contains(".app\\contents\\macos")
+        });
+    }
+    executable.is_some()
 }
 
 fn collect_managed_metadata_candidates(candidates: &mut Vec<Candidate>) {
@@ -220,7 +261,7 @@ fn known_cockpit_roots(home: &Path) -> [PathBuf; 2] {
 }
 
 fn standard_config_bases() -> Vec<PathBuf> {
-    let mut values = Vec::new();
+    let mut values: Vec<PathBuf> = Vec::new();
     if let Some(path) = dirs::config_dir() {
         values.push(path);
     }
@@ -234,7 +275,7 @@ fn collect_instance_store(path: &Path, candidates: &mut Vec<Candidate>) {
     let Ok(metadata) = fs::metadata(path) else {
         return;
     };
-    if !metadata.is_file() || metadata.len() > MAX_METADATA_BYTES {
+    if !is_regular_file(path) || metadata.len() > MAX_METADATA_BYTES {
         return;
     }
     let Ok(content) = fs::read_to_string(path) else {
@@ -303,34 +344,34 @@ fn discover_candidates(candidates: Vec<Candidate>) -> DiscoveryScan {
         }
     }
 
-    let mut unique = BTreeMap::new();
-    for instance in verified {
-        unique
-            .entry(normalized_path_key(&instance.home))
-            .or_insert(instance);
-    }
+    let mut seen = HashSet::new();
+    let instances = verified
+        .into_iter()
+        .filter(|instance| seen.insert(normalized_path_key(&instance.home)))
+        .collect();
     DiscoveryScan {
         candidates_scanned: initial_count + sibling_count,
-        instances: unique.into_values().collect(),
+        instances,
     }
 }
 
 fn inspect_candidate(candidate: Candidate) -> Option<DiscoveredInstance> {
-    let home = canonical_path(&candidate.path);
-    if !is_codex_home(&home) {
+    if !is_codex_home(&candidate.path) {
         return None;
     }
+    let home = canonical_path(&candidate.path);
     let metadata = inspect_config(&home);
     let provider_id = if metadata.active_provider.is_empty() {
         "openai".to_string()
     } else {
         metadata.active_provider.clone()
     };
-    let custom_provider = metadata
-        .providers
-        .iter()
-        .any(|provider| provider.id == provider_id && provider.id != "openai");
-    let kind = if provider_id != "openai" || custom_provider {
+    let official_provider = provider_id.eq_ignore_ascii_case("openai");
+    let custom_provider = metadata.providers.iter().any(|provider| {
+        provider.id.eq_ignore_ascii_case(&provider_id)
+            && !provider.id.eq_ignore_ascii_case("openai")
+    });
+    let kind = if !official_provider || custom_provider {
         ProfileKind::CustomApi
     } else {
         ProfileKind::ChatGptAccount
@@ -358,23 +399,81 @@ fn inspect_candidate(candidate: Candidate) -> Option<DiscoveredInstance> {
 }
 
 fn is_codex_home(home: &Path) -> bool {
-    if !home.is_dir() {
+    let Ok(metadata) = fs::symlink_metadata(home) else {
+        return false;
+    };
+    if !metadata.is_dir() || is_link_or_reparse(&metadata) {
+        return false;
+    }
+    let Ok(canonical) = fs::canonicalize(home) else {
+        return false;
+    };
+    let normalized = canonical
+        .to_string_lossy()
+        .replace('/', "\\")
+        .to_ascii_lowercase();
+    if normalized
+        .split('\\')
+        .any(|part| part == ".claude" || part == "claude")
+    {
+        return false;
+    }
+    for name in [
+        "config.toml",
+        "auth.json",
+        "session_index.jsonl",
+        ".codex-global-state.json",
+        "sessions",
+        "archived_sessions",
+        "sqlite",
+    ] {
+        if let Ok(metadata) = fs::symlink_metadata(canonical.join(name)) {
+            if is_link_or_reparse(&metadata) {
+                return false;
+            }
+        }
+    }
+    if !canonical.is_dir() {
         return false;
     }
     let has_strong_data = ["session_index.jsonl", ".codex-global-state.json"]
         .iter()
-        .any(|name| home.join(name).is_file())
-        || contains_state_database(home)
-        || contains_state_database(&home.join("sqlite"));
+        .any(|name| is_regular_file(&canonical.join(name)))
+        || contains_state_database(&canonical)
+        || contains_state_database(&canonical.join("sqlite"));
     if has_strong_data {
         return true;
     }
 
     let has_session_data = ["sessions", "archived_sessions"]
         .iter()
-        .any(|name| home.join(name).is_dir())
-        || home.join("sqlite").is_dir();
-    has_session_data && is_codex_config(&home.join("config.toml"))
+        .any(|name| is_safe_directory(&canonical.join(name)))
+        || is_safe_directory(&canonical.join("sqlite"));
+    has_session_data && is_codex_config(&canonical.join("config.toml"))
+}
+
+fn is_regular_file(path: &Path) -> bool {
+    fs::metadata(path).is_ok_and(|metadata| metadata.is_file())
+        && fs::symlink_metadata(path).is_ok_and(|metadata| !is_link_or_reparse(&metadata))
+}
+
+fn is_safe_directory(path: &Path) -> bool {
+    fs::metadata(path).is_ok_and(|metadata| metadata.is_dir())
+        && fs::symlink_metadata(path).is_ok_and(|metadata| !is_link_or_reparse(&metadata))
+}
+
+#[cfg(windows)]
+fn is_link_or_reparse(metadata: &fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt;
+
+    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+    metadata.file_type().is_symlink()
+        || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+}
+
+#[cfg(not(windows))]
+fn is_link_or_reparse(metadata: &fs::Metadata) -> bool {
+    metadata.file_type().is_symlink()
 }
 
 fn is_codex_config(path: &Path) -> bool {
@@ -474,7 +573,7 @@ fn contains_state_database(directory: &Path) -> bool {
     };
     entries.flatten().take(MAX_DIRECTORY_ENTRIES).any(|entry| {
         let name = entry.file_name().to_string_lossy().to_ascii_lowercase();
-        entry.path().is_file() && name.starts_with("state_") && name.ends_with(".sqlite")
+        is_regular_file(&entry.path()) && name.starts_with("state_") && name.ends_with(".sqlite")
     })
 }
 
@@ -593,7 +692,7 @@ fn inspect_config(home: &Path) -> ConfigMetadata {
 
 fn read_toml(path: &Path) -> Option<toml::Value> {
     let metadata = fs::metadata(path).ok()?;
-    if !metadata.is_file() || metadata.len() > MAX_CONFIG_BYTES {
+    if !is_regular_file(path) || metadata.len() > MAX_CONFIG_BYTES {
         return None;
     }
     fs::read_to_string(path).ok()?.parse().ok()
@@ -660,21 +759,24 @@ fn push_candidate(
 }
 
 fn deduplicate_candidates(candidates: Vec<Candidate>) -> Vec<Candidate> {
-    let mut values = BTreeMap::new();
+    let mut indexes = HashMap::<String, usize>::new();
+    let mut values: Vec<Candidate> = Vec::new();
     for candidate in candidates {
-        values
-            .entry(normalized_path_key(&candidate.path))
-            .and_modify(|existing: &mut Candidate| {
-                if existing.name_hint.is_none() {
-                    existing.name_hint = candidate.name_hint.clone();
-                }
-                if existing.app_path.is_none() {
-                    existing.app_path = candidate.app_path.clone();
-                }
-            })
-            .or_insert(candidate);
+        let key = normalized_path_key(&candidate.path);
+        if let Some(index) = indexes.get(&key).copied() {
+            let existing = &mut values[index];
+            if existing.name_hint.is_none() {
+                existing.name_hint = candidate.name_hint.clone();
+            }
+            if existing.app_path.is_none() {
+                existing.app_path = candidate.app_path.clone();
+            }
+        } else {
+            indexes.insert(key, values.len());
+            values.push(candidate);
+        }
     }
-    values.into_values().collect()
+    values
 }
 
 pub fn canonical_path(path: &Path) -> PathBuf {
@@ -682,7 +784,11 @@ pub fn canonical_path(path: &Path) -> PathBuf {
 }
 
 pub fn normalized_path_key(path: &Path) -> String {
-    let value = canonical_path(path).to_string_lossy().replace('\\', "/");
+    let value = canonical_path(path)
+        .to_string_lossy()
+        .replace('\\', "/")
+        .trim_end_matches('/')
+        .to_string();
     if cfg!(windows) {
         value.to_ascii_lowercase()
     } else {
@@ -693,6 +799,18 @@ pub fn normalized_path_key(path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn identifies_chatgpt_main_processes_only() {
+        let executable = Path::new(r"C:\Users\demo\AppData\Local\Programs\ChatGPT\ChatGPT.exe");
+        assert!(is_chatgpt_desktop_process("chatgpt", Some(executable), &[]));
+        assert!(!is_chatgpt_desktop_process(
+            "chatgpt",
+            Some(executable),
+            &[std::ffi::OsString::from("--type=renderer")],
+        ));
+        assert!(!is_chatgpt_desktop_process("codex", Some(executable), &[]));
+    }
 
     #[cfg(target_os = "windows")]
     #[test]

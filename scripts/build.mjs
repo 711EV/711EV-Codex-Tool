@@ -52,6 +52,7 @@ if (process.env.TAURI_SIGNING_PRIVATE_KEY_PASSWORD === undefined) {
   process.env.TAURI_SIGNING_PRIVATE_KEY_PASSWORD = "";
 }
 
+let buildError = null;
 try {
   await writeBuildVersion(buildVersion);
   await runNode([path.join("node_modules", "vite", "bin", "vite.js"), "build"]);
@@ -91,7 +92,25 @@ try {
   await Promise.all(
     [...originalVersionFiles].map(([filePath, contents]) => writeFile(filePath, contents, "utf8")),
   );
-  throw error;
+  buildError = error;
+}
+
+let cleanError = null;
+try {
+  await runCommand("cargo", ["clean", "--manifest-path", path.join("src-tauri", "Cargo.toml")]);
+  console.log("Rust 构建缓存已清理：src-tauri/target");
+} catch (error) {
+  cleanError = error;
+}
+
+if (buildError) {
+  if (cleanError) {
+    console.error(`构建失败后清理 Rust 缓存也未完成：${cleanError.message}`);
+  }
+  throw buildError;
+}
+if (cleanError) {
+  throw cleanError;
 }
 
 async function prepareOutputDirectory(system) {
@@ -196,15 +215,19 @@ function writeJson(filePath, value) {
 }
 
 function runNode(args) {
+  return runCommand(process.execPath, args);
+}
+
+function runCommand(command, args) {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, args, {
+    const child = spawn(command, args, {
       cwd: projectRoot,
       stdio: "inherit",
     });
     child.on("error", reject);
     child.on("exit", (code) => {
       if (code === 0) resolve();
-      else reject(new Error(`构建失败，退出码：${code ?? "unknown"}`));
+      else reject(new Error(`${command} 执行失败，退出码：${code ?? "unknown"}`));
     });
   });
 }

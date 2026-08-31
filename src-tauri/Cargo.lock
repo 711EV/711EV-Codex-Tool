@@ -490,7 +490,7 @@ dependencies = [
 
 [[package]]
 name = "codex-local-sync"
-version = "0.1.102"
+version = "0.1.107"
 dependencies = [
  "chrono",
  "dirs",
@@ -498,6 +498,8 @@ dependencies = [
  "hex",
  "libc",
  "notify",
+ "objc2-app-kit",
+ "objc2-quartz-core",
  "rusqlite",
  "serde",
  "serde_json",
@@ -514,6 +516,7 @@ dependencies = [
  "toml_edit 0.22.27",
  "uuid",
  "walkdir",
+ "windows 0.61.3",
  "windows-sys 0.59.0",
 ]
 
@@ -2457,6 +2460,7 @@ dependencies = [
  "objc2",
  "objc2-core-foundation",
  "objc2-foundation",
+ "objc2-quartz-core",
 ]
 
 [[package]]

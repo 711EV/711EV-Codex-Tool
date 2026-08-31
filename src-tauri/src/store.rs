@@ -318,7 +318,7 @@ impl Store {
     pub fn refresh_discovered_profile(&self, profile: &Profile) -> AppResult<()> {
         self.connection.execute(
             "UPDATE profiles SET kind = ?2, provider_id = ?3,
-             app_path = COALESCE(?4, app_path), discovery_source = ?5,
+             app_path = ?4, discovery_source = ?5,
              discovery_state = ?6, last_seen_at = ?7, unavailable_reason = ?8,
              providers_json = ?9, config_profiles_json = ?10, updated_at = ?11 WHERE id = ?1",
             params![

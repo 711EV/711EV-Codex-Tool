@@ -9,15 +9,19 @@ mod provider_config;
 mod replication;
 mod sessions;
 mod store;
+mod window;
 
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc, Mutex,
+};
 
 use chrono::Utc;
 
-use tauri::{Emitter, Manager};
+use tauri::{Emitter, Manager, PhysicalSize, WindowEvent};
 
 use models::{
     AppState, ArchiveCleanupPreview, ArchiveCleanupResult, DiscoveryReport, ProviderConfigInput,
@@ -31,6 +35,85 @@ struct AppContext {
     data_dir: PathBuf,
     store: Mutex<Store>,
     provider_scan_cache: Arc<Mutex<HashMap<String, sessions::IncrementalSessionCache>>>,
+}
+
+pub struct AppLifecycle {
+    allow_exit: AtomicBool,
+}
+
+impl AppLifecycle {
+    fn new() -> Self {
+        Self {
+            allow_exit: AtomicBool::new(false),
+        }
+    }
+}
+
+pub fn show_main_window(app: &tauri::AppHandle) -> tauri::Result<()> {
+    if let Some(window) = app.get_webview_window("main") {
+        let scale = window
+            .current_monitor()?
+            .or(window.primary_monitor()?)
+            .map(|monitor| monitor.scale_factor())
+            .unwrap_or(1.0);
+        apply_fixed_window_size(&window, scale)?;
+        window::remove_native_border(&window)?;
+        window.unminimize()?;
+        window.show()?;
+        window.set_focus()?;
+    }
+    Ok(())
+}
+
+fn fixed_physical_size(scale_factor: f64) -> PhysicalSize<u32> {
+    let scale = if scale_factor.is_finite() && scale_factor > 0.0 {
+        scale_factor
+    } else {
+        1.0
+    };
+    PhysicalSize::new(
+        (420.0 * scale).round() as u32,
+        (794.0 * scale).round() as u32,
+    )
+}
+
+fn apply_fixed_window_size(window: &tauri::WebviewWindow, scale_factor: f64) -> tauri::Result<()> {
+    let size = fixed_physical_size(scale_factor);
+    window.set_size(size)?;
+    window.set_min_size(Some(size))?;
+    window.set_max_size(Some(size))?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod window_size_tests {
+    use super::fixed_physical_size;
+
+    #[test]
+    fn converts_logical_size_to_physical_size_for_common_dpi_values() {
+        assert_eq!(fixed_physical_size(1.0), tauri::PhysicalSize::new(420, 794));
+        assert_eq!(
+            fixed_physical_size(1.25),
+            tauri::PhysicalSize::new(525, 993)
+        );
+        assert_eq!(
+            fixed_physical_size(1.5),
+            tauri::PhysicalSize::new(630, 1191)
+        );
+        assert_eq!(
+            fixed_physical_size(2.0),
+            tauri::PhysicalSize::new(840, 1588)
+        );
+    }
+
+    #[test]
+    fn invalid_scale_falls_back_to_one() {
+        assert_eq!(fixed_physical_size(0.0), tauri::PhysicalSize::new(420, 794));
+        assert_eq!(
+            fixed_physical_size(f64::NAN),
+            tauri::PhysicalSize::new(420, 794)
+        );
+    }
 }
 
 fn lock_store(context: &AppContext) -> Result<std::sync::MutexGuard<'_, Store>, String> {
@@ -356,28 +439,21 @@ async fn replication_migrate(
 async fn restart_codex_client(
     context: tauri::State<'_, AppContext>,
     profile_id: String,
-    force_close_client: bool,
 ) -> Result<bool, String> {
     let data_dir = context.data_dir.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let store = Store::open(&data_dir).map_err(String::from)?;
         let profile = store.get_profile(&profile_id).map_err(String::from)?;
         let home = profile.home_path();
-        let shutdown =
-            process::ensure_stopped(&home, profile.app_path.as_deref(), force_close_client)
-                .map_err(String::from)?;
-        let app_path = profile
-            .app_path
-            .as_deref()
-            .or(shutdown.executable.as_deref());
-        let started = process::restart(app_path, &home).map_err(String::from)?;
+        let started =
+            process::force_restart(profile.app_path.as_deref(), &home).map_err(String::from)?;
         if !started {
-            return Err("未检测到 Codex 客户端启动路径".into());
+            return Err("未检测到 ChatGPT 启动路径".into());
         }
         Ok(true)
     })
     .await
-    .map_err(|error| format!("client restart task failed: {error}"))?
+    .map_err(|error| format!("ChatGPT restart task failed: {error}"))?
 }
 
 #[tauri::command]
@@ -476,7 +552,11 @@ fn discover_and_register(
                 }
             }
             if refreshed.app_path.is_none() {
-                refreshed.app_path = existing.app_path.clone();
+                refreshed.app_path = existing
+                    .app_path
+                    .as_deref()
+                    .filter(|path| process::is_restartable_client_path(path))
+                    .map(str::to_string);
             }
             provider_config::ensure_required_main_config(
                 data_dir,
@@ -528,6 +608,11 @@ fn discover_and_register(
                 // candidate scan. Keep it active if a source was temporarily
                 // unavailable during the scan.
                 let mut restored = profile.clone();
+                restored.app_path = restored
+                    .app_path
+                    .as_deref()
+                    .filter(|path| process::is_restartable_client_path(path))
+                    .map(str::to_string);
                 restored.discovery_state = "active".into();
                 restored.last_seen_at = Some(checked_at.clone());
                 restored.unavailable_reason = None;
@@ -579,17 +664,88 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_process::init())
+        .manage(AppLifecycle::new())
         .setup(|app| {
             app.handle()
                 .plugin(tauri_plugin_updater::Builder::new().build())?;
             let icon = app.default_window_icon().cloned();
             if let Some(window) = app.get_webview_window("main") {
-                if let Some(icon) = icon {
+                if let Some(icon) = icon.clone() {
                     window.set_icon(icon)?;
                 }
-                #[cfg(target_os = "windows")]
-                window.set_shadow(false)?;
+                window.set_resizable(false)?;
+                window.set_maximizable(false)?;
+                let scale = window
+                    .current_monitor()?
+                    .or(window.primary_monitor()?)
+                    .map(|m| m.scale_factor())
+                    .unwrap_or(1.0);
+                apply_fixed_window_size(&window, scale)?;
+                window::remove_native_border(&window)?;
+                window.show()?;
+                window.set_focus()?;
+                let close_window = window.clone();
+                window.on_window_event(move |event| match event {
+                    WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
+                        let _ = apply_fixed_window_size(&close_window, *scale_factor);
+                        let _ = window::remove_native_border(&close_window);
+                    }
+                    WindowEvent::CloseRequested { api, .. } => {
+                        if !close_window
+                            .app_handle()
+                            .state::<AppLifecycle>()
+                            .allow_exit
+                            .load(Ordering::SeqCst)
+                        {
+                            api.prevent_close();
+                            let _ = close_window.hide();
+                        }
+                    }
+                    _ => {}
+                });
             }
+            let menu = tauri::menu::MenuBuilder::new(app)
+                .text("show-main-window", "显示主窗口")
+                .text("check-update", "检查更新")
+                .separator()
+                .text("exit-app", "退出")
+                .build()?;
+            let mut tray_builder = tauri::tray::TrayIconBuilder::with_id("main-tray")
+                .menu(&menu)
+                .tooltip("ChatGPT中转工具")
+                .show_menu_on_left_click(false)
+                .on_menu_event(|app, event| match event.id().as_ref() {
+                    "show-main-window" => {
+                        let _ = show_main_window(app);
+                    }
+                    "check-update" => {
+                        let _ = show_main_window(app);
+                        let _ = app.emit("app://check-update", ());
+                    }
+                    "exit-app" => {
+                        app.state::<AppLifecycle>()
+                            .allow_exit
+                            .store(true, Ordering::SeqCst);
+                        app.exit(0);
+                    }
+                    _ => {}
+                })
+                .on_tray_icon_event(|tray, event| {
+                    if matches!(
+                        event,
+                        tauri::tray::TrayIconEvent::Click {
+                            button: tauri::tray::MouseButton::Left,
+                            button_state: tauri::tray::MouseButtonState::Up,
+                            ..
+                        }
+                    ) {
+                        let _ = show_main_window(tray.app_handle());
+                    }
+                });
+            if let Some(icon) = icon {
+                tray_builder = tray_builder.icon(icon);
+            }
+            tray_builder.build(app)?;
             Ok(())
         })
         .manage(AppContext {
@@ -620,6 +776,19 @@ pub fn run() {
             replication_history,
             replication_cleanup_orphans,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running Codex Local Sync");
+        .build(tauri::generate_context!())
+        .expect("error while building ChatGPT relay tool")
+        .run(|app, event| {
+            #[cfg(target_os = "macos")]
+            if let tauri::RunEvent::Reopen {
+                has_visible_windows: false,
+                ..
+            } = event
+            {
+                let _ = show_main_window(app);
+            }
+
+            #[cfg(not(target_os = "macos"))]
+            let _ = (app, event);
+        });
 }
