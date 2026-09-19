@@ -17,7 +17,7 @@ export async function verifyMcpProtocol(binary) {
     for await (const chunk of request) chunks.push(chunk);
     requests.push({ url: request.url, authorization: request.headers.authorization, body: Buffer.concat(chunks).toString() });
     response.setHeader("Content-Type", "application/json");
-    response.end(JSON.stringify({ created: 1, model: "openai-image", data: [{ b64_json: png.toString("base64") }] }));
+    response.end(JSON.stringify({ created: 1, model: "gpt-image-2", data: [{ b64_json: png.toString("base64") }] }));
   });
   let child;
   try {
@@ -79,8 +79,8 @@ export async function verifyMcpProtocol(binary) {
     assert.ok(edited.content.some((item) => item.type === "image"));
     assert.deepEqual(requests.map((request) => request.url), ["/v1/images/generations", "/v1/images/edits"]);
     assert.ok(requests.every((request) => request.authorization === "Bearer test-only-key"));
-    assert.equal(JSON.parse(requests[0].body).model, "openai-image");
-    assert.ok(requests[1].body.includes("openai-image"));
+    assert.equal(JSON.parse(requests[0].body).model, "gpt-image-2");
+    assert.ok(requests[1].body.includes("gpt-image-2"));
     await writeFile(path.join(home, "auth.json"), JSON.stringify({ OPENAI_API_KEY: "mismatched-test-key" }));
     const denied = await call("tools/call", { name: "generate_image", arguments: { prompt: "must not call server", output_dir: output } });
     assert.equal(denied.isError, true);

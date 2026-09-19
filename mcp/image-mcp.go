@@ -25,7 +25,7 @@ import (
 )
 
 const (
-	imageModel              = "openai-image"
+	imageModel              = "gpt-image-2"
 	defaultImageSize        = "1024x1024"
 	requestTimeout          = 120 * time.Second
 	serverVersion           = "2.1.0"

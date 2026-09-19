@@ -20,7 +20,7 @@ const packageJson = JSON.parse(await readFile(path.join(projectRoot, "package.js
 const version = packageJson.version;
 const releaseHighlightsByVersion = new Map([
   [
-    "1.2.2",
+    "1.2.3",
     `- 新增生图功能。
 - 新增环境检测。
 - 优化用户体验。`,
