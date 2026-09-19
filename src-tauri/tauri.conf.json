@@ -2,7 +2,7 @@
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "ChatGPT中转工具",
   "mainBinaryName": "711EV-Codex-Tool",
-  "version": "1.2.1",
+  "version": "1.2.2",
   "identifier": "com.codexlocalsync.desktop",
   "build": {
     "beforeBuildCommand": "npm run build:mcp",

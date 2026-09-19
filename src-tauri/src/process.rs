@@ -954,9 +954,18 @@ mod tests {
         assert!(!is_restartable_application_path(Path::new(
             r"C:\Users\tester\AppData\Roaming\npm\codex.exe",
         )));
+        #[cfg(target_os = "windows")]
         assert!(is_restartable_client_path(
             r"C:\Program Files\OpenAI\ChatGPT\ChatGPT.exe"
         ));
+        #[cfg(target_os = "macos")]
+        {
+            assert!(!is_restartable_client_path("/usr/local/bin/codex"));
+            assert!(is_restartable_client_path("/Applications/ChatGPT.app"));
+            assert!(is_restartable_client_path(
+                "/Applications/Codex.app/Contents/MacOS/Codex"
+            ));
+        }
     }
 
     #[test]
