@@ -20,6 +20,12 @@ const packageJson = JSON.parse(await readFile(path.join(projectRoot, "package.js
 const version = packageJson.version;
 const releaseHighlightsByVersion = new Map([
   [
+    "1.2.1",
+    `- 新增生图功能。
+- 新增环境检测。
+- 优化用户体验。`,
+  ],
+  [
     "1.1.8",
     `- 产品界面、窗口标题、安装快捷方式与应用图标统一升级为“ChatGPT中转工具”，保留原可执行文件名和升级标识以兼容已有安装。
 - 重构 ChatGPT Desktop 探测与重启：支持 Windows Store、独立安装和 macOS App，按目标 \`CODEX_HOME\` 安全匹配主进程并排除 CLI、App Server 与 Chromium 辅助进程。

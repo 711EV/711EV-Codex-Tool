@@ -2,6 +2,7 @@ use std::path::Path;
 
 use chrono::Utc;
 use rusqlite::{params, Connection, OptionalExtension};
+use serde::{Deserialize, Serialize};
 
 use crate::error::{AppError, AppResult};
 use crate::models::{
@@ -44,8 +45,17 @@ pub struct ProviderSwitchTransactionRow {
     pub auth_target_exists: bool,
     pub expected_config_sha256: String,
     pub expected_auth_sha256: Option<String>,
+    pub agents_change: Option<AgentsFileChange>,
     pub phase: String,
     pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentsFileChange {
+    pub backup_path: String,
+    pub candidate_path: String,
+    pub original_sha256: Option<String>,
+    pub expected_sha256: Option<String>,
 }
 
 pub struct Store {
@@ -190,6 +200,7 @@ impl Store {
             "TEXT",
         )?;
         self.add_column_if_missing("profiles", "providers_json", "TEXT NOT NULL DEFAULT '[]'")?;
+        self.add_column_if_missing("provider_switch_transactions", "agents_change_json", "TEXT")?;
         self.add_column_if_missing(
             "profiles",
             "config_profiles_json",
@@ -582,8 +593,8 @@ impl Store {
             "INSERT INTO provider_switch_transactions
              (id, profile_id, provider_id, codex_home, config_backup_path, auth_backup_path,
               auth_existed, config_existed, config_candidate_path, auth_candidate_path, auth_target_exists,
-              expected_config_sha256, expected_auth_sha256, phase, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+              expected_config_sha256, expected_auth_sha256, phase, created_at, agents_change_json)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
             params![
                 value.id,
                 value.profile_id,
@@ -600,6 +611,7 @@ impl Store {
                 value.expected_auth_sha256,
                 value.phase,
                 value.created_at,
+                value.agents_change.as_ref().map(serde_json::to_string).transpose()?,
             ],
         )?;
         Ok(())
@@ -618,7 +630,7 @@ impl Store {
             "SELECT id, profile_id, provider_id, codex_home, config_backup_path,
                     auth_backup_path, auth_existed, config_existed, config_candidate_path, auth_candidate_path,
                     auth_target_exists, expected_config_sha256, expected_auth_sha256, phase,
-                    created_at
+                    created_at, agents_change_json
              FROM provider_switch_transactions WHERE phase != 'complete'",
         )?;
         let rows = statement.query_map([], |row| {
@@ -638,6 +650,18 @@ impl Store {
                 expected_auth_sha256: row.get(12)?,
                 phase: row.get(13)?,
                 created_at: row.get(14)?,
+                agents_change: row
+                    .get::<_, Option<String>>(15)?
+                    .map(|json| {
+                        serde_json::from_str(&json).map_err(|error| {
+                            rusqlite::Error::FromSqlConversionFailure(
+                                15,
+                                rusqlite::types::Type::Text,
+                                Box::new(error),
+                            )
+                        })
+                    })
+                    .transpose()?,
             })
         })?;
         rows.collect::<Result<Vec<_>, _>>().map_err(AppError::from)

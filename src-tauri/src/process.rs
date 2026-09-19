@@ -260,6 +260,18 @@ pub fn ensure_stopped(
 }
 
 pub fn force_restart(app_path: Option<&str>, codex_home: &Path) -> AppResult<bool> {
+    let Some(target) = resolve_restart_target(app_path, codex_home)? else {
+        return Ok(false);
+    };
+    force_stop(&target, codex_home)?;
+    start_resolved_target(&target, codex_home)?;
+    Ok(true)
+}
+
+fn resolve_restart_target(
+    app_path: Option<&str>,
+    codex_home: &Path,
+) -> AppResult<Option<RestartTarget>> {
     let target = running_target(codex_home).or_else(|| {
         app_path.and_then(|path| {
             let executable = Path::new(path);
@@ -272,15 +284,29 @@ pub fn force_restart(app_path: Option<&str>, codex_home: &Path) -> AppResult<boo
         Some(target) => Some(target),
         None => installed_target()?,
     };
-    let Some(target) = target else {
-        return Ok(false);
-    };
+    Ok(target)
+}
+
+/// Resolve before shutdown so repair always restarts the same application.
+pub fn repair_and_restart<T>(
+    app_path: Option<&str>,
+    codex_home: &Path,
+    repair: impl FnOnce() -> AppResult<T>,
+) -> AppResult<T> {
+    let target = resolve_restart_target(app_path, codex_home)?
+        .ok_or_else(|| AppError::Message("未检测到 ChatGPT 启动路径".into()))?;
     force_stop(&target, codex_home)?;
-    launch(&target, codex_home)?;
-    if !wait_for_start(&target, codex_home, CLIENT_START_TIMEOUT) {
+    let result = repair()?;
+    start_resolved_target(&target, codex_home)?;
+    Ok(result)
+}
+
+fn start_resolved_target(target: &RestartTarget, codex_home: &Path) -> AppResult<()> {
+    launch(target, codex_home)?;
+    if !wait_for_start(target, codex_home, CLIENT_START_TIMEOUT) {
         return Err(AppError::Message("ChatGPT 启动失败，请手动启动".into()));
     }
-    Ok(true)
+    Ok(())
 }
 
 fn force_stop(target: &RestartTarget, codex_home: &Path) -> AppResult<()> {

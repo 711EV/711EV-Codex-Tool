@@ -1,0 +1,25 @@
+import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { parseDesktopVersion } from "../../scripts/desktop-version.mjs";
+
+assert.equal(process.versions.node.split(".")[0], "24", "Release jobs require Node.js 24");
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
+const json = async (name) => JSON.parse(await readFile(path.join(root, name), "utf8"));
+const pkg = await json("package.json");
+parseDesktopVersion(pkg.version);
+assert.equal(process.argv[2], `v${pkg.version}`, "Release tag must match the package version");
+const tauri = await json("src-tauri/tauri.conf.json");
+assert.equal(tauri.version, pkg.version, "Tauri version is out of sync");
+const manifest = await readFile(path.join(root, "src-tauri/Cargo.toml"), "utf8");
+assert.equal(/\[package\][\s\S]*?^version\s*=\s*"([^"]+)"/m.exec(manifest)?.[1], pkg.version, "Cargo version is out of sync");
+const crateName = /\[package\][\s\S]*?^name\s*=\s*"([^"]+)"/m.exec(manifest)?.[1];
+const lock = await readFile(path.join(root, "src-tauri/Cargo.lock"), "utf8");
+const crate = lock.split("[[package]]").find((entry) => entry.includes(`name = "${crateName}"`));
+assert.equal(/^version = "([^"]+)"/m.exec(crate ?? "")?.[1], pkg.version, "Cargo.lock version is out of sync");
+assert.equal(tauri.build.beforeBuildCommand, "npm run build:mcp", "Tauri must build MCP before bundling");
+assert.ok(!tauri.bundle.resources?.length, "Windows must embed MCP without duplicate loose resources");
+const mac = await json("src-tauri/tauri.macos.conf.json");
+assert.deepEqual(mac.bundle.resources, ["resources/mcp/image-mcp-darwin-amd64", "resources/mcp/image-mcp-darwin-arm64"]);
+console.log(`发布预检通过：v${pkg.version}，Node.js 24，版本一致，MCP 平台资源隔离。`);

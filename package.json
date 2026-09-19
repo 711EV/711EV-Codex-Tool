@@ -2,10 +2,11 @@
   "name": "711ev-codex-tool",
   "author": "711EV",
   "private": true,
-  "version": "1.1.8",
+  "version": "1.2.1",
   "type": "module",
   "scripts": {
     "build": "node scripts/build.mjs",
+    "build:mcp": "node scripts/build-mcp.mjs",
     "test": "vitest run"
   },
   "dependencies": {

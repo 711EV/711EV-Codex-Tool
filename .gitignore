@@ -1,5 +1,4 @@
 node_modules/
-src/App.test.ts
 package-lock.json
 build/
 dist/
@@ -8,5 +7,6 @@ CodexLocalSync.data/
 vite-dev.log
 vite-dev.err.log
 src-tauri/target/
+src-tauri/resources/mcp/
 src-tauri/gen/schemas/
 agent.md

@@ -20,11 +20,14 @@ use toml_edit::{value, DocumentMut, Item, Table};
 use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
+use crate::mcp_configuration;
 use crate::models::{
     DiscoveredProvider, Profile, ProviderConfigInput, ProviderConfigTemplate, ProviderConfigView,
     ProviderSwitchResult,
 };
-use crate::store::{OfficialSnapshotRow, ProviderConfigRow, ProviderSwitchTransactionRow, Store};
+use crate::store::{
+    AgentsFileChange, OfficialSnapshotRow, ProviderConfigRow, ProviderSwitchTransactionRow, Store,
+};
 
 const OFFICIAL_ID: &str = "openai";
 const SEVEN_ELEVEN_ID: &str = "711EV";
@@ -290,7 +293,27 @@ pub fn switch(
     let config_before = read_optional(&config_path)?;
     let auth_before = read_optional(&auth_path)?;
     let auth_existed = auth_path.is_file();
-    let target = build_switch_target(store, &profile, provider_id, &config_before)?;
+    let mut target = build_switch_target(store, &profile, provider_id, &config_before)?;
+    let keep_image = mcp_configuration::provider_is_eligible(&config_before)
+        .map_err(AppError::Message)?
+        && mcp_configuration::provider_is_eligible(&target.config).map_err(AppError::Message)?;
+    let agents_path = home.join("AGENTS.md");
+    let agents_update = if keep_image {
+        None
+    } else {
+        crate::mcp::reject_link(&agents_path)?;
+        let before = match fs::read(&agents_path) {
+            Ok(bytes) => Some(bytes),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(error) => return Err(error.into()),
+        };
+        let after =
+            mcp_configuration::remove_image_agents_rules(before.as_deref().unwrap_or_default())
+                .map_err(AppError::Message)?;
+        target.config = mcp_configuration::remove_image_configuration(&target.config)
+            .map_err(AppError::Message)?;
+        Some((before, after))
+    };
     let transaction_id = Uuid::new_v4().to_string();
     let transaction_dir = data_dir.join("transactions").join(&transaction_id);
     fs::create_dir_all(&transaction_dir)?;
@@ -311,6 +334,24 @@ pub fn switch(
     if auth_candidate.is_file() {
         set_private_file_permissions(&auth_candidate)?;
     }
+    let agents_change = agents_update
+        .map(|(before, after)| -> AppResult<AgentsFileChange> {
+            let backup = transaction_dir.join("agents.before");
+            let candidate = transaction_dir.join("agents.after");
+            for (path, bytes) in [(&backup, &before), (&candidate, &after)] {
+                if let Some(bytes) = bytes {
+                    write_atomic(path, bytes)?;
+                    set_private_file_permissions(path)?;
+                }
+            }
+            Ok(AgentsFileChange {
+                backup_path: backup.to_string_lossy().into_owned(),
+                candidate_path: candidate.to_string_lossy().into_owned(),
+                original_sha256: before.as_deref().map(digest),
+                expected_sha256: after.as_deref().map(digest),
+            })
+        })
+        .transpose()?;
     let transaction = ProviderSwitchTransactionRow {
         id: transaction_id.clone(),
         profile_id: profile_id.to_string(),
@@ -325,6 +366,7 @@ pub fn switch(
         auth_target_exists: target.auth.is_some(),
         expected_config_sha256: digest(&target.config),
         expected_auth_sha256: target.auth.as_deref().map(digest),
+        agents_change,
         phase: "prepared".into(),
         created_at: Utc::now().to_rfc3339(),
     };
@@ -448,6 +490,8 @@ fn commit_switch_transaction(
 
     apply_auth_target(transaction, &auth_path)?;
     store.update_switch_transaction_phase(&transaction.id, "auth_committed")?;
+    apply_agents_target(transaction)?;
+    store.update_switch_transaction_phase(&transaction.id, "agents_committed")?;
     validate_transaction_target(transaction)?;
     store.update_switch_transaction_phase(&transaction.id, "validated")?;
     Ok(())
@@ -456,6 +500,12 @@ fn commit_switch_transaction(
 pub fn recover_transactions(data_dir: &Path, store: &Store) -> AppResult<()> {
     for transaction in store.list_pending_switch_transactions()? {
         let _lock = acquire_home_lock(data_dir, &transaction.profile_id)?;
+        // Interrupted three-file switches roll back together, including removed rules.
+        if transaction.agents_change.is_some() {
+            restore_transaction(&transaction)?;
+            finish_transaction(store, &transaction)?;
+            continue;
+        }
         if transaction.config_candidate_path.is_empty()
             || transaction.expected_config_sha256.is_empty()
         {
@@ -526,7 +576,7 @@ fn resume_transaction(store: &Store, transaction: &ProviderSwitchTransactionRow)
             apply_auth_target(transaction, &auth_path)?;
             store.update_switch_transaction_phase(&transaction.id, "auth_committed")?;
         }
-        "auth_committed" | "validated" => {}
+        "auth_committed" | "agents_committed" | "validated" => {}
         phase => {
             return Err(AppError::Message(format!(
                 "无法识别的供应商切换事务阶段: {phase}"
@@ -557,6 +607,47 @@ fn apply_auth_target(
     } else if auth_path.exists() {
         fs::remove_file(auth_path)?;
         sync_parent(auth_path)?;
+    }
+    Ok(())
+}
+
+fn apply_agents_target(transaction: &ProviderSwitchTransactionRow) -> AppResult<()> {
+    let Some(change) = &transaction.agents_change else {
+        return Ok(());
+    };
+    let path = Path::new(&transaction.codex_home).join("AGENTS.md");
+    ensure_agents_is_original_or_target(&path, change)?;
+    if checked_file_hash(&path)? == change.expected_sha256 {
+        return Ok(());
+    }
+    if let Some(hash) = &change.expected_sha256 {
+        let candidate = read_and_verify(Path::new(&change.candidate_path), hash, "规则候选文件")?;
+        write_atomic(&path, &candidate)?;
+    } else if path.exists() {
+        fs::remove_file(&path)?;
+        sync_parent(&path)?;
+    }
+    if checked_file_hash(&path)? != change.expected_sha256 {
+        return Err(AppError::Message("AGENTS.md 写入后校验失败".into()));
+    }
+    Ok(())
+}
+
+fn checked_file_hash(path: &Path) -> AppResult<Option<String>> {
+    crate::mcp::reject_link(path)?;
+    match fs::read(path) {
+        Ok(bytes) => Ok(Some(digest(&bytes))),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn ensure_agents_is_original_or_target(path: &Path, change: &AgentsFileChange) -> AppResult<()> {
+    let current = checked_file_hash(path)?;
+    if current != change.original_sha256 && current != change.expected_sha256 {
+        return Err(AppError::Message(
+            "AGENTS.md 已被其他内容修改，不能覆盖；切换事务已保留".into(),
+        ));
     }
     Ok(())
 }
@@ -608,6 +699,11 @@ fn validate_transaction_target(transaction: &ProviderSwitchTransactionRow) -> Ap
         return Err(AppError::Message(
             "auth.json 应已删除，但重新读取时仍然存在".into(),
         ));
+    }
+    if let Some(change) = &transaction.agents_change {
+        if checked_file_hash(&home.join("AGENTS.md"))? != change.expected_sha256 {
+            return Err(AppError::Message("AGENTS.md 事务结果校验失败".into()));
+        }
     }
     Ok(())
 }
@@ -1102,7 +1198,7 @@ fn read_optional(path: &Path) -> AppResult<Vec<u8>> {
     }
 }
 
-fn write_atomic(path: &Path, bytes: &[u8]) -> AppResult<()> {
+pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> AppResult<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -1167,6 +1263,36 @@ fn restore_transaction(transaction: &ProviderSwitchTransactionRow) -> AppResult<
     let home = Path::new(&transaction.codex_home);
     let config_path = home.join("config.toml");
     let auth_path = home.join("auth.json");
+    if let Some(change) = &transaction.agents_change {
+        let agents_path = home.join("AGENTS.md");
+        // Check all files before rollback so external edits are never overwritten.
+        ensure_agents_is_original_or_target(&agents_path, change)?;
+        let original_config = original_file_hash(
+            Path::new(&transaction.config_backup_path),
+            transaction.config_existed,
+        );
+        let current_config = checked_file_hash(&config_path)?;
+        if current_config != original_config
+            && current_config.as_deref() != Some(&transaction.expected_config_sha256)
+        {
+            return Err(AppError::Message(
+                "config.toml 已被其他内容修改，不能覆盖；切换事务已保留".into(),
+            ));
+        }
+        ensure_auth_is_original_or_target(transaction, &auth_path)?;
+        if checked_file_hash(&agents_path)? != change.original_sha256 {
+            if let Some(hash) = &change.original_sha256 {
+                let backup = read_and_verify(Path::new(&change.backup_path), hash, "规则备份")?;
+                write_atomic(&agents_path, &backup)?;
+            } else if agents_path.exists() {
+                fs::remove_file(&agents_path)?;
+                sync_parent(&agents_path)?;
+            }
+        }
+        if checked_file_hash(&agents_path)? != change.original_sha256 {
+            return Err(AppError::Message("AGENTS.md 回滚校验失败".into()));
+        }
+    }
     if transaction.config_existed {
         let backup = Path::new(&transaction.config_backup_path);
         if !backup.is_file() {
@@ -1216,7 +1342,7 @@ fn verify_file_hash(path: &Path, expected: &str, label: &str) -> AppResult<()> {
     Ok(())
 }
 
-fn acquire_home_lock(data_dir: &Path, profile_id: &str) -> AppResult<File> {
+pub(crate) fn acquire_home_lock(data_dir: &Path, profile_id: &str) -> AppResult<File> {
     let locks = data_dir.join("locks");
     fs::create_dir_all(&locks)?;
     let path = locks.join(format!("{profile_id}.provider.lock"));
@@ -1912,6 +2038,7 @@ mod tests {
             auth_target_exists: true,
             expected_config_sha256: digest(config_after),
             expected_auth_sha256: Some(digest(auth_after)),
+            agents_change: None,
             phase: "config_committed".into(),
             created_at: Utc::now().to_rfc3339(),
         };
@@ -1923,6 +2050,281 @@ mod tests {
         assert_eq!(fs::read(home.join("auth.json")).unwrap(), auth_after);
         assert!(store.list_pending_switch_transactions().unwrap().is_empty());
         assert!(!transaction_dir.exists());
+    }
+
+    fn image_switch_fixture(
+        source_eligible: bool,
+        target_eligible: bool,
+    ) -> (tempfile::TempDir, PathBuf, PathBuf, Store) {
+        let temp = tempfile::tempdir().unwrap();
+        let data = temp.path().join("data");
+        let home = temp.path().join("home");
+        fs::create_dir_all(&data).unwrap();
+        fs::create_dir_all(&home).unwrap();
+        let url = if source_eligible {
+            "https://AI.711EV.COM/v1"
+        } else {
+            "https://other.example/v1"
+        };
+        fs::write(home.join("config.toml"), format!("# keep\nmodel_provider = 'first'\ncli_auth_credentials_store = 'file'\ndisable_response_storage = true\nservice_tier = 'fast'\n[model_providers.first]\nbase_url = '{url}'\n[mcp_servers.other]\ncommand = 'keep'\n")).unwrap();
+        fs::write(home.join("auth.json"), br#"{"OPENAI_API_KEY":"first-key"}"#).unwrap();
+        fs::write(home.join("image-mcp.exe"), b"fixture").unwrap();
+        mcp_configuration::configure(&home, &home.join("image-mcp.exe")).unwrap();
+        let store = Store::open(&data).unwrap();
+        store
+            .insert_profile(&test_profile(&home, "profile", "first"))
+            .unwrap();
+        let mut row = test_provider_row("profile", "second", "second-key");
+        if target_eligible {
+            row.base_url = "https://ai.711ev.com/other".into();
+        }
+        store.upsert_provider_config(&row).unwrap();
+        // A saved but unapplied address must not determine source eligibility.
+        let mut pending = test_provider_row("profile", "first", "first-key");
+        pending.base_url = if source_eligible {
+            "https://other.example/v1"
+        } else {
+            "https://ai.711ev.com/v1"
+        }
+        .into();
+        store.upsert_provider_config(&pending).unwrap();
+        (temp, data, home, store)
+    }
+
+    #[test]
+    fn image_cleanup_switch_matrix_uses_applied_source_and_candidate_target() {
+        for source in [false, true] {
+            for target in [false, true] {
+                let (_temp, data, home, store) = image_switch_fixture(source, target);
+                let agents_before = fs::read(home.join("AGENTS.md")).unwrap();
+                switch(&data, &store, "profile", "second").unwrap();
+                let config = fs::read_to_string(home.join("config.toml"))
+                    .unwrap()
+                    .parse::<toml::Value>()
+                    .unwrap();
+                assert_eq!(
+                    config["mcp_servers"].get("generate_image").is_some(),
+                    source && target
+                );
+                assert_eq!(
+                    config["mcp_servers"]["other"]["command"].as_str(),
+                    Some("keep")
+                );
+                if source && target {
+                    assert_eq!(fs::read(home.join("AGENTS.md")).unwrap(), agents_before);
+                    assert_eq!(
+                        mcp_configuration::inspect(&home, &home.join("image-mcp.exe")).unwrap(),
+                        (true, true)
+                    );
+                } else {
+                    assert!(!home.join("AGENTS.md").exists());
+                    assert_eq!(
+                        mcp_configuration::inspect(&home, &home.join("image-mcp.exe")).unwrap(),
+                        (false, false)
+                    );
+                    assert!(!home.join("AGENTS.md").exists());
+                }
+                let auth: JsonValue =
+                    serde_json::from_slice(&fs::read(home.join("auth.json")).unwrap()).unwrap();
+                assert_eq!(auth, json!({ "OPENAI_API_KEY": "second-key" }));
+                assert!(store.list_pending_switch_transactions().unwrap().is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn image_cleanup_preserves_user_rules_and_never_reenables_on_return() {
+        let (_temp, data, home, store) = image_switch_fixture(true, false);
+        let rules = fs::read_to_string(home.join("AGENTS.md")).unwrap();
+        fs::write(
+            home.join("AGENTS.md"),
+            format!("\u{feff}# User rules\r\n{rules}"),
+        )
+        .unwrap();
+        switch(&data, &store, "profile", "second").unwrap();
+        assert_eq!(
+            fs::read_to_string(home.join("AGENTS.md")).unwrap(),
+            "\u{feff}# User rules\r\n"
+        );
+        let mut first = test_provider_row("profile", "first", "first-key");
+        first.base_url = "https://ai.711ev.com/v1".into();
+        store.upsert_provider_config(&first).unwrap();
+        switch(&data, &store, "profile", "first").unwrap();
+        assert_eq!(
+            mcp_configuration::inspect(&home, &home.join("image-mcp.exe")).unwrap(),
+            (false, false)
+        );
+        assert_eq!(
+            fs::read_to_string(home.join("AGENTS.md")).unwrap(),
+            "\u{feff}# User rules\r\n"
+        );
+    }
+
+    #[test]
+    fn official_switch_cleans_image_without_erasing_user_rules() {
+        let (_temp, data, home, store) = image_switch_fixture(true, true);
+        let rules = fs::read_to_string(home.join("AGENTS.md")).unwrap();
+        fs::write(home.join("AGENTS.md"), format!("# Keep\n{rules}")).unwrap();
+        switch(&data, &store, "profile", "openai").unwrap();
+        assert_eq!(
+            fs::read_to_string(home.join("AGENTS.md")).unwrap(),
+            "# Keep\n"
+        );
+        assert_eq!(
+            mcp_configuration::inspect(&home, &home.join("image-mcp.exe")).unwrap(),
+            (false, false)
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn locked_agents_rolls_back_provider_config_and_auth() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let (_temp, data, home, store) = image_switch_fixture(true, false);
+        let before: Vec<_> = ["config.toml", "auth.json", "AGENTS.md"]
+            .iter()
+            .map(|name| fs::read(home.join(name)).unwrap())
+            .collect();
+        let locked = OpenOptions::new()
+            .read(true)
+            .share_mode(1)
+            .open(home.join("AGENTS.md"))
+            .unwrap();
+        assert!(switch(&data, &store, "profile", "second").is_err());
+        for (name, bytes) in ["config.toml", "auth.json", "AGENTS.md"].iter().zip(before) {
+            assert_eq!(fs::read(home.join(name)).unwrap(), bytes);
+        }
+        assert!(store.list_pending_switch_transactions().unwrap().is_empty());
+        drop(locked);
+    }
+
+    fn staged_image_transaction(
+        data: &Path,
+        home: &Path,
+        store: &Store,
+    ) -> ProviderSwitchTransactionRow {
+        let directory = data.join("transactions").join("image-test");
+        fs::create_dir_all(&directory).unwrap();
+        let before = fs::read(home.join("config.toml")).unwrap();
+        let after = mcp_configuration::remove_image_configuration(&before).unwrap();
+        let auth = fs::read(home.join("auth.json")).unwrap();
+        let rules = fs::read(home.join("AGENTS.md")).unwrap();
+        for (name, bytes) in [
+            ("config.before", &before),
+            ("config.after", &after),
+            ("auth.before", &auth),
+            ("auth.after", &auth),
+            ("agents.before", &rules),
+        ] {
+            fs::write(directory.join(name), bytes).unwrap();
+        }
+        let transaction = ProviderSwitchTransactionRow {
+            id: "image-test".into(),
+            profile_id: "profile".into(),
+            provider_id: "second".into(),
+            codex_home: home.to_string_lossy().into_owned(),
+            config_backup_path: directory
+                .join("config.before")
+                .to_string_lossy()
+                .into_owned(),
+            config_existed: true,
+            auth_backup_path: directory.join("auth.before").to_string_lossy().into_owned(),
+            auth_existed: true,
+            config_candidate_path: directory
+                .join("config.after")
+                .to_string_lossy()
+                .into_owned(),
+            auth_candidate_path: directory.join("auth.after").to_string_lossy().into_owned(),
+            auth_target_exists: true,
+            expected_config_sha256: digest(&after),
+            expected_auth_sha256: Some(digest(&auth)),
+            agents_change: Some(AgentsFileChange {
+                backup_path: directory
+                    .join("agents.before")
+                    .to_string_lossy()
+                    .into_owned(),
+                candidate_path: directory
+                    .join("agents.after")
+                    .to_string_lossy()
+                    .into_owned(),
+                original_sha256: Some(digest(&rules)),
+                expected_sha256: None,
+            }),
+            phase: "prepared".into(),
+            created_at: Utc::now().to_rfc3339(),
+        };
+        store.insert_switch_transaction(&transaction).unwrap();
+        transaction
+    }
+
+    #[test]
+    fn interrupted_image_cleanup_rolls_back_at_every_commit_stage() {
+        for phase in [
+            "prepared",
+            "config_committed",
+            "auth_committed",
+            "agents_committed",
+            "validated",
+        ] {
+            let (_temp, data, home, store) = image_switch_fixture(true, false);
+            let before: Vec<_> = ["config.toml", "auth.json", "AGENTS.md"]
+                .iter()
+                .map(|name| fs::read(home.join(name)).unwrap())
+                .collect();
+            let transaction = staged_image_transaction(&data, &home, &store);
+            if phase != "prepared" {
+                fs::write(
+                    home.join("config.toml"),
+                    fs::read(&transaction.config_candidate_path).unwrap(),
+                )
+                .unwrap();
+            }
+            if phase == "agents_committed" || phase == "validated" {
+                fs::remove_file(home.join("AGENTS.md")).unwrap();
+            }
+            store
+                .update_switch_transaction_phase(&transaction.id, phase)
+                .unwrap();
+            recover_transactions(&data, &store).unwrap();
+            for (name, bytes) in ["config.toml", "auth.json", "AGENTS.md"].iter().zip(before) {
+                assert_eq!(fs::read(home.join(name)).unwrap(), bytes);
+            }
+            assert!(store.list_pending_switch_transactions().unwrap().is_empty());
+        }
+    }
+
+    #[test]
+    fn cleanup_recovery_preserves_external_changes_and_transaction() {
+        for name in ["config.toml", "auth.json", "AGENTS.md"] {
+            let (_temp, data, home, store) = image_switch_fixture(true, false);
+            let transaction = staged_image_transaction(&data, &home, &store);
+            commit_switch_transaction(&store, &transaction).unwrap();
+            fs::write(home.join(name), b"external change").unwrap();
+            assert!(recover_transactions(&data, &store)
+                .unwrap_err()
+                .to_string()
+                .contains("不能覆盖"));
+            assert_eq!(fs::read(home.join(name)).unwrap(), b"external change");
+            assert_eq!(store.list_pending_switch_transactions().unwrap().len(), 1);
+        }
+    }
+
+    #[test]
+    fn corrupt_agents_candidate_restores_all_files() {
+        let (_temp, data, home, store) = image_switch_fixture(true, false);
+        let before: Vec<_> = ["config.toml", "auth.json", "AGENTS.md"]
+            .iter()
+            .map(|name| fs::read(home.join(name)).unwrap())
+            .collect();
+        let mut transaction = staged_image_transaction(&data, &home, &store);
+        let change = transaction.agents_change.as_mut().unwrap();
+        change.expected_sha256 = Some(digest(b"# Keep\n"));
+        fs::write(&change.candidate_path, b"corrupt").unwrap();
+        assert!(commit_switch_transaction(&store, &transaction).is_err());
+        restore_transaction(&transaction).unwrap();
+        for (name, bytes) in ["config.toml", "auth.json", "AGENTS.md"].iter().zip(before) {
+            assert_eq!(fs::read(home.join(name)).unwrap(), bytes);
+        }
     }
 
     #[test]
@@ -1950,6 +2352,7 @@ mod tests {
             auth_target_exists: false,
             expected_config_sha256: String::new(),
             expected_auth_sha256: None,
+            agents_change: None,
             phase: "prepared".into(),
             created_at: Utc::now().to_rfc3339(),
         };
@@ -1995,6 +2398,7 @@ mod tests {
                 auth_target_exists: false,
                 expected_config_sha256: digest(config_after),
                 expected_auth_sha256: None,
+                agents_change: None,
                 phase: "prepared".into(),
                 created_at: Utc::now().to_rfc3339(),
             })

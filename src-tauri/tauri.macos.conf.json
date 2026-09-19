@@ -1,0 +1,9 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "bundle": {
+    "resources": [
+      "resources/mcp/image-mcp-darwin-amd64",
+      "resources/mcp/image-mcp-darwin-arm64"
+    ]
+  }
+}

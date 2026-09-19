@@ -4,7 +4,8 @@ import { useId } from "vue";
 const props = withDefaults(defineProps<{
   content: string;
   placement?: "top" | "top-start" | "top-end";
-}>(), { placement: "top" });
+  disabled?: boolean;
+}>(), { placement: "top", disabled: false });
 
 const tooltipId = `app-tooltip-${useId()}`;
 let pointerFocused = false;
@@ -28,14 +29,14 @@ function handlePointerLeave(event: PointerEvent) {
   <div
     class="app-tooltip-trigger"
     :class="`app-tooltip-trigger--${props.placement}`"
-    tabindex="0"
-    :aria-describedby="tooltipId"
+    :tabindex="props.disabled ? undefined : 0"
+    :aria-describedby="props.disabled ? undefined : tooltipId"
     @pointerdown="handlePointerDown"
     @pointerenter="handlePointerEnter"
     @pointerleave="handlePointerLeave"
   >
     <slot />
-    <div :id="tooltipId" class="app-tooltip-popup" role="tooltip">
+    <div v-if="!props.disabled" :id="tooltipId" class="app-tooltip-popup" role="tooltip">
       <div class="app-tooltip-inner">{{ props.content }}</div>
       <span class="app-tooltip-arrow" aria-hidden="true" />
     </div>

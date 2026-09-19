@@ -1,6 +1,8 @@
 mod app_server;
 mod discovery;
 mod error;
+mod mcp;
+mod mcp_configuration;
 mod models;
 pub mod portable;
 mod process;
@@ -710,6 +712,9 @@ pub fn run() {
             replication_execute,
             replication_migrate,
             restart_codex_client,
+            mcp::ensure_image_mcp,
+            mcp::refresh_image_mcp_if_installed,
+            mcp::repair_image_mcp,
             replication_sync_preview,
             replication_sync_updates,
             replication_history,

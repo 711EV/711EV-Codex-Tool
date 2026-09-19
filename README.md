@@ -36,18 +36,25 @@ ChatGPT中转工具是一款纯本地运行的 ChatGPT Desktop 配置与 Codex �
 
 本工具不恢复 ChatGPT 云端聊天，也不是会话备份软件。执行删除前请确认相关本地会话不再需要。
 
+### 使用生图
+
+- 生图功能仅支持 711EV 供应商，可在 ChatGPT 中生成或修改图片。
+- 切换到 711EV 供应商后，点击底部“使用生图”，按提示重启 ChatGPT 即可使用。
+- 显示“生图正常”时无需重复配置；出现“修复生图”时，点击并按提示完成修复。
+- 从其他供应商切回 711EV 后，如显示“使用生图”，请重新启用。
+
 ### 桌面体验
 
 - 三段式竖屏界面，可视内容根据显示器工作区和 DPI 在 `320×605` 至 `420×794` 逻辑像素之间保持 `9:17` 比例，外窗另留透明阴影空间。
 - 无边框圆角窗口、desk 暗色三层阴影、隐藏滚动条和内容区初始化状态。
 - 关闭窗口时隐藏到系统托盘；托盘菜单支持显示主窗口、检查更新和退出。
 - 应用内检查、下载和安装更新；“检查更新”悬停提示当前版本。
-- 内置 QQ 交流群、GitHub、711EV 导航、推荐梯子和 711EV 中转站入口。
+- 内置 QQ 交流群、GitHub、推荐梯子和 711EV 中转站入口。
 - Message 通知支持队列、自动消失、同类消息更新和悬停暂停计时。
 
 ## 快速使用
 
-1. 启动应用，等待内容区初始化完成。
+1. 启动应用，等待内容区初始化及配置目录检测完成。未发现有效目录时，会显示安装引导并阻止进入内容区；请先安装并启动 ChatGPT 客户端，再点击“重新检测”。“下载 ChatGPT”打开 [官方下载页面](https://openai.com/zh-Hans-CN/codex/)。检测失败时显示具体原因，可手动重试。
 2. 在顶部“配置目录”中确认当前 `CODEX_HOME`；有多个目录时可展开切换。
 3. 查看供应商卡片。已配置的供应商可点击“立即使用”，未配置的供应商先点击“添加配置”。
 4. 切换供应商后，根据弹窗选择是否立即重启 ChatGPT，使新配置生效。
@@ -151,17 +158,19 @@ CodexLocalSync.data/
 - Windows 安装后桌面快捷方式为“ChatGPT中转工具”，主程序仍为 `711EV-Codex-Tool.exe`。
 - Windows 同时提供便携版可执行文件。
 - macOS 提供 Intel 与 Apple Silicon 通用 DMG。
+- 已内置生图所需组件，无需单独安装。
 
 首次启动需要对 `CodexLocalSync.data` 具有写权限。程序目录不可写时，应用可能请求提升权限以初始化数据目录。
 
 ## 本地开发
 
-需要 Node.js 24、Rust stable，以及对应平台的 Tauri 2 构建环境。GitHub Actions 的正式构建与发布同样使用 Node.js 24。
+需要 Node.js 24、Rust stable、Go 1.23 或更高版本，以及对应平台的 Tauri 2 构建环境。可通过 `GO_BINARY` 指定 Go 路径；GitHub Actions 的正式构建与发布同样使用 Node.js 24。
 
 ```text
 npm install --no-package-lock
 npm test
 node node_modules/vue-tsc/bin/vue-tsc.js --noEmit
+npm run build:mcp
 cargo fmt --check --manifest-path src-tauri/Cargo.toml
 cargo test --manifest-path src-tauri/Cargo.toml
 cargo check --manifest-path src-tauri/Cargo.toml
@@ -179,7 +188,7 @@ npm exec vite -- build
 npm run build
 ```
 
-`npm run build` 会在打包前自动把补丁版本增加一位，并同步版本文件；构建失败时恢复原版本。它还要求 Tauri 更新签名私钥，并在结束后清理 `src-tauri/target`。普通检查不要执行该命令。
+`npm run build` 会在打包前按与 711EV-Codex 桌面客户端相同的规则递增版本，并同步版本文件：补丁位逐次加 1，到 10 后下次向次版本进位、补丁位重置为 1（如 `1.1.9 → 1.1.10 → 1.2.1`）；次版本也到 10 时向主版本进位（如 `1.10.10 → 2.1.1`）。版本格式必须为 `major.minor.patch`，次版本和补丁位仅允许 0–10。构建失败时恢复原版本。它还要求 Tauri 更新签名私钥，并在结束后清理 `src-tauri/target`。普通检查不要执行该命令。
 
 本地打包输出：
 
@@ -187,12 +196,16 @@ npm run build
 - 本地预览程序：`dist/`
 - 便携数据目录：`dist/CodexLocalSync.data/`
 
+GitHub 发布构建的维护说明见 [发布流程](.github/README.md)。
+
 ## 项目结构
 
 ```text
 src/                       Vue 界面、状态管理和 IPC 封装
 src-tauri/src/             Rust 业务逻辑与桌面生命周期
 src-tauri/icons/           应用、托盘和安装器图标
+mcp/                      与账号工具一致的 Go 生图 MCP 源码和测试
+scripts/build-mcp.mjs      按系统生成两种架构的 MCP 资源
 scripts/build.mjs          本地版本递增与桌面测试包脚本
 .github/workflows/         Windows/macOS 正式发布流程
 ```
@@ -201,7 +214,6 @@ scripts/build.mjs          本地版本递增与桌面测试包脚本
 
 - [使用教程](https://docs.711ev.com/#/711ev-relay/guide/codex-tool)
 - [QQ 交流群](https://qm.qq.com/q/e9xHZxgN4Q)
-- [711EV 导航](https://www.711ev.com/)
 - [711EV 中转站](https://ai.711ev.com/)
 - [推荐梯子](https://www.tntv2.net/auth/register?code=oow59s)
 - [GitHub 项目](https://github.com/711EV/711EV-Codex-Tool)

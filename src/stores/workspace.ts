@@ -42,7 +42,7 @@ export const useWorkspaceStore = defineStore("workspace", () => {
   const providerConfigSaving = ref(false);
   const providerConfigSwitching = ref(false);
 
-  const profiles = computed(() => appState.value?.profiles ?? []);
+  const profiles = computed(() => appState.value?.profiles.filter((profile) => profile.discoveryState === "active") ?? []);
   const activeProfile = computed(() =>
     profiles.value.find((profile) => profile.id === activeProfileId.value),
   );
@@ -77,10 +77,11 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     try {
       appState.value = await backend.getAppState();
       providerConfigTemplates.value = await backend.providerConfigTemplates();
-      activeProfileId.value ||= profiles.value[0]?.id ?? null;
-      await refreshProviders();
+      await discoverProfiles();
+      if (error.value) throw new Error(error.value);
     } catch (reason) {
       error.value = messageOf(reason);
+      throw reason;
     } finally {
       loading.value = false;
       initializing.value = false;
@@ -92,6 +93,7 @@ export const useWorkspaceStore = defineStore("workspace", () => {
       providerBuckets.value = [];
       providerSessions.value = [];
       selectedProviderId.value = null;
+      providerConfig.value = null;
       return;
     }
     loading.value = true;
@@ -262,6 +264,9 @@ export const useWorkspaceStore = defineStore("workspace", () => {
       else appState.value = await backend.getAppState();
       if (!profiles.value.some((profile) => profile.id === activeProfileId.value)) {
         activeProfileId.value = profiles.value[0]?.id ?? null;
+        selectedProviderId.value = null;
+        selectedThreadIds.value = [];
+        providerConfig.value = null;
       }
       await refreshProviders();
       return report;

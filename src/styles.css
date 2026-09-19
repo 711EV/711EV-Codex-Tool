@@ -2107,6 +2107,10 @@ select:focus,
   font-size: 16px;
 }
 
+.modal-dialog > p {
+  margin: 0 18px 12px;
+}
+
 .form-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -3009,6 +3013,8 @@ select:focus,
 .app-footer button { display: inline-flex; align-items: center; gap: 4px; padding: 5px 4px; color: var(--text-tertiary); background: transparent; border: 0; border-radius: 5px; font-size: 10px; cursor: pointer; }
 .app-footer button:hover:not(:disabled) { color: var(--text-primary); background: var(--surface-hover); }
 .app-footer button:disabled { cursor: not-allowed; }
+.app-footer button.image-mcp-ready { color: var(--success); }
+.app-footer button.image-mcp-repair { color: var(--danger); }
 .modal-backdrop { z-index: 1000; align-items: center; padding: 10px; place-items: center; }
 .modal-backdrop.high-priority { z-index: 1100; }
 .provider-config-modal, .recovery-modal { width: min(390px, calc(100% - 20px)); max-height: calc(100% - 20px); overflow: auto; }
@@ -3367,6 +3373,11 @@ body,
   position: relative;
   z-index: 1;
 }
+/* The menu inherits the toolbar's stacking context, so lift the toolbar
+   above the provider list while keeping it below the initialization mask. */
+.app-content > .storage-bar {
+  z-index: 2;
+}
 .initialization-overlay {
   position: absolute;
   z-index: var(--z-layer-initialization);
@@ -3439,6 +3450,22 @@ body,
 }
 .initialization-dots i:nth-child(2) { animation-delay: 120ms; }
 .initialization-dots i:nth-child(3) { animation-delay: 240ms; }
+
+.workspace-gate {
+  gap: 18px;
+  padding: 24px 18px;
+  overflow-y: auto;
+  text-align: center;
+}
+.workspace-gate-icon { flex: 0 0 auto; color: var(--accent); }
+.workspace-gate-copy { width: 100%; max-width: 310px; min-width: 0; }
+.workspace-gate-copy h2 { margin: 0 0 10px; color: var(--text-primary); font-size: 16px; line-height: 1.5; }
+.workspace-gate-copy p { margin: 0; color: var(--text-secondary); font-size: 12px; line-height: 1.8; overflow-wrap: anywhere; text-wrap: pretty; }
+.workspace-gate-error { max-height: 180px; overflow-y: auto; white-space: pre-wrap; }
+.workspace-gate-actions { display: flex; width: 100%; max-width: 310px; justify-content: center; gap: 8px; }
+.workspace-gate-actions button { min-width: 0; min-height: 34px; flex: 1 1 0; gap: 5px; padding: 8px; font-size: 12px; white-space: nowrap; }
+.workspace-gate-actions button:only-child { flex: 0 1 140px; }
+.workspace-gate-actions button:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 
 /* Keep the message queue's DOM, timing and visual treatment in lockstep with
    desk. These final rules intentionally use desk's fixed dark tokens. */

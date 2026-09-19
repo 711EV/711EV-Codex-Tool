@@ -8,7 +8,6 @@ import {
   Database,
   Github,
   BookOpen,
-  Navigation,
   Rocket,
   Zap,
 } from "lucide-vue-next";
@@ -36,11 +35,6 @@ const menuLinks = [
     label: "推荐梯子",
     url: "https://www.tntv2.net/auth/register?code=oow59s",
     icon: Rocket,
-  },
-  {
-    label: "711EV导航",
-    url: "https://www.711ev.com/",
-    icon: Navigation,
   },
   {
     label: "711EV中转站",

@@ -8,8 +8,30 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: desktop-release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
+  validate:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Use Node.js 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Check release version and MCP packaging configuration
+        run: node .github/scripts/check-release.mjs "$GITHUB_REF_NAME"
+      - run: npm install --no-package-lock
+      - name: Test frontend, version rules and resource validation
+        run: npm test
+      - run: npm exec vue-tsc -- --noEmit
+
   prepare-release:
+    needs: validate
     runs-on: ubuntu-latest
     steps:
       - name: Prepare draft release
@@ -40,6 +62,11 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 24
+      - name: Use Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: mcp/go.mod
+          cache-dependency-path: mcp/go.sum
       - name: Prepare toolchains
         shell: pwsh
         run: |
@@ -47,9 +74,16 @@ jobs:
           npm --version
           rustup toolchain install stable --profile minimal
           rustup default stable
+          rustup component add rustfmt
+          node .github/scripts/check-release.mjs $env:GITHUB_REF_NAME
+          $env:SEVEN_ZIP_BINARY = (Get-Command 7z -ErrorAction Stop).Source
+          "SEVEN_ZIP_BINARY=$env:SEVEN_ZIP_BINARY" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
       - run: npm install --no-package-lock
-      - run: npm exec vue-tsc -- --noEmit
+      - name: Build and test Windows MCP for both architectures
+        run: npm run build:mcp -- --platform windows
       - run: npm exec vite -- build
+      - run: cargo fmt --check --manifest-path src-tauri/Cargo.toml
+      - run: cargo test --locked --manifest-path src-tauri/Cargo.toml
       - name: Build Windows applications
         run: npm exec tauri -- build --bundles nsis
         env:
@@ -75,6 +109,8 @@ jobs:
           Copy-Item "src-tauri/target/release/711EV-Codex-Tool.exe" "release-assets/$portableName"
           Copy-Item $installer.FullName "release-assets/$installerName"
           Copy-Item $signature "release-assets/$installerName.sig"
+      - name: Verify embedded Windows MCP
+        run: node scripts/verify-mcp-package.mjs src-tauri/target/release/711EV-Codex-Tool.exe src-tauri/target/release/bundle/nsis
       - name: Upload Windows assets
         shell: pwsh
         env:
@@ -101,6 +137,11 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 24
+      - name: Use Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: mcp/go.mod
+          cache-dependency-path: mcp/go.sum
       - name: Prepare toolchains
         shell: bash
         run: |
@@ -110,14 +151,21 @@ jobs:
           rustup toolchain install stable --profile minimal
           rustup default stable
           rustup target add aarch64-apple-darwin x86_64-apple-darwin
+          rustup component add rustfmt
+          node .github/scripts/check-release.mjs "$GITHUB_REF_NAME"
       - run: npm install --no-package-lock
-      - run: npm exec vue-tsc -- --noEmit
+      - name: Build and test macOS MCP for both architectures
+        run: npm run build:mcp -- --platform macos
       - run: npm exec vite -- build
+      - run: cargo fmt --check --manifest-path src-tauri/Cargo.toml
+      - run: cargo test --locked --manifest-path src-tauri/Cargo.toml
       - name: Build universal macOS applications
         run: npm exec tauri -- build --target universal-apple-darwin --bundles app,dmg
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
+      - name: Verify MCP in macOS app, disk image and updater
+        run: node scripts/verify-mcp-macos-package.mjs src-tauri/target/universal-apple-darwin/release/bundle
       - name: Collect macOS assets
         shell: bash
         run: |
@@ -171,6 +219,8 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             --dir release-assets \
             --pattern '*'
+      - name: Verify Node.js and release version before publishing
+        run: node .github/scripts/check-release.mjs "$GITHUB_REF_NAME"
       - name: Create cross-platform update manifest
         run: node .github/scripts/create-update-manifest.mjs release-assets "$GITHUB_REPOSITORY"
       - name: Publish GitHub Release

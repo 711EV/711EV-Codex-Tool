@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
 import path from "node:path";
 import process from "node:process";
+import { nextDesktopVersion } from "./desktop-version.mjs";
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const targetRoot = path.join(projectRoot, "src-tauri", "target", "release");
@@ -30,7 +31,7 @@ const originalVersionFiles = new Map(
   ),
 );
 const currentPackage = JSON.parse(originalVersionFiles.get(versionFiles[0]));
-const buildVersion = incrementPatchVersion(currentPackage.version);
+const buildVersion = nextDesktopVersion(currentPackage.version);
 
 if (!process.env.TAURI_SIGNING_PRIVATE_KEY && !process.env.TAURI_SIGNING_PRIVATE_KEY_PATH) {
   const defaultSigningKey = path.join(homedir(), ".tauri", "711ev-codex-tool.key");
@@ -65,6 +66,11 @@ try {
       "build",
       "--bundles",
       "nsis",
+    ]);
+    await runNode([
+      path.join("scripts", "verify-mcp-package.mjs"),
+      path.join(targetRoot, portableExecutableName),
+      ...(process.env.SEVEN_ZIP_BINARY ? [path.join(targetRoot, "bundle", "nsis")] : []),
     ]);
     await prepareOutputDirectory(system);
     await cp(
@@ -172,12 +178,6 @@ async function pathExists(filePath) {
     if (error?.code === "ENOENT") return false;
     throw error;
   }
-}
-
-function incrementPatchVersion(version) {
-  const match = /^(\d+)\.(\d+)\.(\d+)$/.exec(version);
-  if (!match) throw new Error(`不支持的版本格式：${version}`);
-  return `${match[1]}.${match[2]}.${Number(match[3]) + 1}`;
 }
 
 async function writeBuildVersion(version) {
